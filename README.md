@@ -128,6 +128,7 @@ RoBERTa is a variant of the BERT model. Although both models have different pret
 
 Following the transformers PyTorch implementation,  RoBERTa Model can be divided into the 2 main parts:
 
+- <strong>Roberta Config</strong>: For Holding Model Configuration
 - <strong>Roberta Model (RobertaModel)</strong> : This is the main model class that contains the embedding and the encoder module.
     - Embedding  (RobertaEmbeddings)
     - Encoder (RobertaEncoder)
@@ -191,8 +192,9 @@ Import the necessary modules from candle and other crates:
         ```python
         from torch import nn
 
-        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         ```
+
     - Candle: In candle we can implement the layer normalization using the equation above. Steps:
         - Since normalization is done over the last axis which is the hidden size, we can use the `sum_keepdim` method to sum over the last axis and divide by dimension size to get `mean_x`.
         - For each element in the tensor, we subtract the mean and square the result and divide by hidden dimension to get `norm_x`.
@@ -213,17 +215,17 @@ Import the necessary modules from candle and other crates:
             }
 
             pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-                let x_dtype = x.dtype();
+                let x_dtype = x.dtype(); // Get the data type of the input tensor
                 let internal_dtype = match x_dtype {
                     DType::F16 | DType::BF16 => DType::F32,
                     d => d,
                 };
-                let (_bsize, _seq_len, hidden_size) = x.dims3()?;
-                let x = x.to_dtype(internal_dtype)?;
-                let mean_x = (x.sum_keepdim(2)? / hidden_size as f64)?;
-                let x = x.broadcast_sub(&mean_x)?;
-                let norm_x = (x.sqr()?.sum_keepdim(2)? / hidden_size as f64)?;
-                let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
+                let (_bsize, _seq_len, hidden_size) = x.dims3()?; // Get the dimensions of the input tensor
+                let x = x.to_dtype(internal_dtype)?; 
+                let mean_x = (x.sum_keepdim(2)? / hidden_size as f64)?; // Get the mean of the input tensor and divide by the hidden size
+                let x = x.broadcast_sub(&mean_x)?; // Subtract the mean from the input tensor
+                let norm_x = (x.sqr()?.sum_keepdim(2)? / hidden_size as f64)?; // Get the squared norm of the input tensor and divide by the hidden size
+                let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?; // Get the normalized input
                 let x = x_normed
                     .to_dtype(x_dtype)?
                     .broadcast_mul(&self.weight)?
@@ -247,4 +249,193 @@ Import the necessary modules from candle and other crates:
         let normalized_tensor = layer_norm.forward(&input_tensor)?;
         ```
 
-- Dropout 
+- Dropout: Randomly zero out different parts of the input tensor using a probability value. This is only used during training, since we are translating a pretrained model, we can just write a struct that returns the passed input tensor
+
+   - PyTorch: In PyTorch, we can use LayerNorm by calling it as a module
+
+        ```python
+        from torch import nn
+
+        dropout = nn.Dropout(p=0.1)
+        input = torch.randn(2)
+        output = dropout(input)
+        ```
+    - Candle: In candle we can implement the dropout layer by just returning the input tensor
+
+        ```rust
+        struct Dropout {
+            #[allow(dead_code)]
+            pr: f64,
+        }
+
+        impl Dropout {
+            fn new(pr: f64) -> Self {
+                Self { pr }
+            }
+
+            fn forward(&self, x: &Tensor) -> Result<Tensor> {
+                Ok(x.clone())
+            }
+        }
+        ```
+
+        This struct can be used as follows:
+
+        ```rust
+        let dropout = Dropout::new(0.1);
+
+        let data: [u32; 3] = [1u32, 2, 3];
+        let input_tensor = Tensor::new(&data, &Device::Cpu)?;
+        let dropout_tensor = dropout.forward(&input_tensor)?;
+        ```
+
+- Activation: The RoBERTa uses a GELU activation function. We can implement the GELU using a similar approach as dropout above with no input params. Candle tensors have an inbuilt module to perform this operation
+
+    - PyTorch: In PyTorch, we can use LayerNorm by calling it as a module
+
+        ```python
+        from torch import nn
+
+        activation = nn.GELU()
+        input = torch.randn(2)
+        output = activation(input)
+        ```
+
+    - Candle: In candle we can implement the dropout layer by just returning the input tensor
+
+        ```rust
+        struct Activation {}
+
+        impl Activation {
+            fn new() -> Self {
+                Self {}
+            }
+
+            fn forward(&self, x: &Tensor) -> Result<Tensor> {
+                Ok(x.gelu()?)
+            }
+        }
+        ```
+
+        This struct can be used as follows:
+
+        ```rust
+        let activation = Activation::new();
+
+        let data: [u32; 3] = [1u32, 2, 3];
+        let input_tensor = Tensor::new(&data, &Device::Cpu)?;
+        let activation_tensor = activation.forward(&input_tensor)?;
+        ```
+
+#### Roberta Config:
+Up next if the Roberta Config. This is a struct that holds the configuration of the model. It is similar to the [RobertaConfig](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/configuration_roberta.py#L37) in the transformers library. For this Struct, We will have two implementations, one to use a default value and another to 
+
+
+<table>
+<tr>
+<td>
+
+```python
+model_type = "roberta"
+
+def __init__(
+    self,
+    vocab_size=50265,
+    hidden_size=768,
+    num_hidden_layers=12,
+    num_attention_heads=12,
+    intermediate_size=3072,
+    hidden_act="gelu",
+    hidden_dropout_prob=0.1,
+    attention_probs_dropout_prob=0.1,
+    max_position_embeddings=512,
+    type_vocab_size=2,
+    initializer_range=0.02,
+    layer_norm_eps=1e-12,
+    pad_token_id=1,
+    bos_token_id=0,
+    eos_token_id=2,
+    position_embedding_type="absolute",
+    use_cache=True,
+    classifier_dropout=None,
+    **kwargs,
+):
+    super().__init__(pad_token_id=pad_token_id, 
+    bos_token_id=bos_token_id, 
+    eos_token_id=eos_token_id, **kwargs)
+
+    self.vocab_size = vocab_size
+    self.hidden_size = hidden_size
+    self.num_hidden_layers = num_hidden_layers
+    self.num_attention_heads = num_attention_heads
+    self.hidden_act = hidden_act
+    self.intermediate_size = intermediate_size
+    self.hidden_dropout_prob = hidden_dropout_prob
+    self.attention_probs_dropout_prob = attention_probs_dropout_prob
+    self.max_position_embeddings = max_position_embeddings
+    self.type_vocab_size = type_vocab_size
+    self.initializer_range = initializer_range
+    self.layer_norm_eps = layer_norm_eps
+    self.position_embedding_type = position_embedding_type
+    self.use_cache = use_cache
+    self.classifier_dropout = classifier_dropout
+```
+
+</code>
+</td>
+<td>
+
+```rust
+pub struct RobertaConfig {
+    vocab_size: usize,
+    hidden_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    intermediate_size: usize,
+    hidden_act: HiddenAct,
+    hidden_dropout_prob: f64,
+    max_position_embeddings: usize,
+    type_vocab_size: usize,
+    initializer_range: f64,
+    layer_norm_eps: f64,
+    pad_token_id: usize,
+    bos_token_id: usize,
+    eos_token_id: usize,
+    #[serde(default)]
+    position_embedding_type: PositionEmbeddingType,
+    #[serde(default)]
+    use_cache: bool,
+    classifier_dropout: Option<f64>,
+    model_type: Option<String>,
+}
+
+impl Default for RobertaConfig {
+    fn default() -> Self {
+        Self {
+            vocab_size: 50265,
+            hidden_size: 768,
+            num_hidden_layers: 12,
+            num_attention_heads: 12,
+            intermediate_size: 3072,
+            hidden_act: HiddenAct::Gelu,
+            hidden_dropout_prob: 0.1,
+            max_position_embeddings: 512,
+            type_vocab_size: 2,
+            initializer_range: 0.02,
+            layer_norm_eps: 1e-12,
+            pad_token_id: 1,
+            bos_token_id: 0,
+            eos_token_id: 2,
+            position_embedding_type: PositionEmbeddingType::Absolute,
+            use_cache: true,
+            classifier_dropout: None,
+            model_type: Some("roberta".to_string()),
+        }
+    }
+}
+```
+
+</td>
+</tr>
+</table>
+
