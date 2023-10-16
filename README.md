@@ -179,7 +179,7 @@ Import the necessary modules from candle and other crates:
     use serde::Deserialize;
     ```
 
-#### Writing Building Blocks:
+### a. Writing Building Blocks:
 
 - Layer Norm (https://pytorch.org/docs/stable/generated/torch.nn.LayerNorm.html): Used to a normalize a tensor over a given axis. It is used in the embedding layer and the encoder layer. A good explanation of layer normalization can be [found here](https://www.pinecone.io/learn/batch-layer-normalization/#What-is-Layer-Normalization). This is required because we need to implement the low-level layer norm module in Candle.
 
@@ -327,63 +327,9 @@ Import the necessary modules from candle and other crates:
         let activation_tensor = activation.forward(&input_tensor)?;
         ```
 
-#### Roberta Config:
-Up next if the Roberta Config. This is a struct that holds the configuration of the model. It is similar to the [RobertaConfig](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/configuration_roberta.py#L37) in the transformers library. For this Struct, We will have two implementations, one to use a default value and another to 
+### b. Roberta Config:
 
-
-<table>
-<tr>
-<td>
-
-```python
-model_type = "roberta"
-
-def __init__(
-    self,
-    vocab_size=50265,
-    hidden_size=768,
-    num_hidden_layers=12,
-    num_attention_heads=12,
-    intermediate_size=3072,
-    hidden_act="gelu",
-    hidden_dropout_prob=0.1,
-    attention_probs_dropout_prob=0.1,
-    max_position_embeddings=512,
-    type_vocab_size=2,
-    initializer_range=0.02,
-    layer_norm_eps=1e-12,
-    pad_token_id=1,
-    bos_token_id=0,
-    eos_token_id=2,
-    position_embedding_type="absolute",
-    use_cache=True,
-    classifier_dropout=None,
-    **kwargs,
-):
-    super().__init__(pad_token_id=pad_token_id, 
-    bos_token_id=bos_token_id, 
-    eos_token_id=eos_token_id, **kwargs)
-
-    self.vocab_size = vocab_size
-    self.hidden_size = hidden_size
-    self.num_hidden_layers = num_hidden_layers
-    self.num_attention_heads = num_attention_heads
-    self.hidden_act = hidden_act
-    self.intermediate_size = intermediate_size
-    self.hidden_dropout_prob = hidden_dropout_prob
-    self.attention_probs_dropout_prob = attention_probs_dropout_prob
-    self.max_position_embeddings = max_position_embeddings
-    self.type_vocab_size = type_vocab_size
-    self.initializer_range = initializer_range
-    self.layer_norm_eps = layer_norm_eps
-    self.position_embedding_type = position_embedding_type
-    self.use_cache = use_cache
-    self.classifier_dropout = classifier_dropout
-```
-
-</code>
-</td>
-<td>
+Up next is the Roberta Config. This is a struct that holds the configuration of the model. It is similar to the [RobertaConfig](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/configuration_roberta.py#L37) in the transformers library. For this Struct, We will initialize the default values for the config (We implement the `Default` trait for the `RobertaConfig` struct ) and then use the serde crate to deserialize the config from a json file.
 
 ```rust
 pub struct RobertaConfig {
@@ -392,7 +338,7 @@ pub struct RobertaConfig {
     num_hidden_layers: usize,
     num_attention_heads: usize,
     intermediate_size: usize,
-    hidden_act: HiddenAct,
+    hidden_act: String,
     hidden_dropout_prob: f64,
     max_position_embeddings: usize,
     type_vocab_size: usize,
@@ -401,9 +347,7 @@ pub struct RobertaConfig {
     pad_token_id: usize,
     bos_token_id: usize,
     eos_token_id: usize,
-    #[serde(default)]
-    position_embedding_type: PositionEmbeddingType,
-    #[serde(default)]
+    position_embedding_type: String,
     use_cache: bool,
     classifier_dropout: Option<f64>,
     model_type: Option<String>,
@@ -417,7 +361,7 @@ impl Default for RobertaConfig {
             num_hidden_layers: 12,
             num_attention_heads: 12,
             intermediate_size: 3072,
-            hidden_act: HiddenAct::Gelu,
+            hidden_act: "gelu".to_string(),
             hidden_dropout_prob: 0.1,
             max_position_embeddings: 512,
             type_vocab_size: 2,
@@ -435,7 +379,6 @@ impl Default for RobertaConfig {
 }
 ```
 
-</td>
-</tr>
-</table>
+### b. RobertaEmbeddings:
 
+```
