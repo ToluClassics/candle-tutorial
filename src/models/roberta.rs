@@ -160,6 +160,49 @@ impl Default for RobertaConfig {
     }
 }
 
+fn cumsum_2d(mask: &Tensor, dim: u8, device: &Device) -> Result<Tensor> {
+
+    let mask = mask.to_vec2::<u8>()?;
+
+    let rows = mask.len();
+    let cols = mask[0].len();
+
+    let mut result = mask.clone();
+
+    match dim {
+        0 => {  // Cumulative sum along rows
+            for i in 0..rows {
+                for j in 1..cols {
+                    result[i][j] += result[i][j - 1];
+                }
+            }
+        },
+        1 => {  // Cumulative sum along columns
+            for j in 0..cols {
+                for i in 1..rows {
+                    result[i][j] += result[i - 1][j];
+                }
+            }
+        },
+        _ => panic!("Dimension not supported"),
+    }
+
+    let result = Tensor::new(result, &device)?;
+
+    Ok(result)
+}
+
+
+pub fn create_position_ids_from_input_ids(input_ids: &Tensor, padding_idx: u32, past_key_values_length: u8) -> Result<Tensor> {
+
+    let mask = input_ids.ne(padding_idx)?;
+    let incremental_indices = cumsum_2d(&mask, 0, input_ids.device())?;
+
+    let incremental_indices = incremental_indices.broadcast_add(&Tensor::new(&[past_key_values_length], input_ids.device())?)?;
+
+    Ok(incremental_indices)
+}
+
 
 fn embedding(vocab_size: usize, hidden_size: usize, vb: VarBuilder) -> Result<Embedding> {
     let embeddings = vb.get((vocab_size, hidden_size), "weight")?;
@@ -218,6 +261,7 @@ impl RobertaEmbeddings {
             vb.pp("LayerNorm"),
         )?;
         let padding_idx = config.pad_token_id as u32;
+
         Ok(Self {
             word_embeddings,
             position_embeddings: Some(position_embeddings),
@@ -229,17 +273,23 @@ impl RobertaEmbeddings {
     }
 
     pub fn forward(&self, input_ids: &Tensor, token_type_ids: &Tensor, position_ids: Option<&Tensor>, inputs_embeds: Option<&Tensor>) -> Result<Tensor> {
-        let (_bsize, _seq_len) = input_ids.dims2()?;
 
         let position_ids = match position_ids {
             Some(ids) => ids.to_owned(),
             None => {
-                let position_ids = self.create_position_ids_from_input_embeds(inputs_embeds.unwrap())?;
-                position_ids
+                if Option::is_some(&inputs_embeds){
+                    let position_ids = self.create_position_ids_from_input_embeds(inputs_embeds.unwrap())?;
+                    position_ids
+                } else {
+                    let position_ids = create_position_ids_from_input_ids(input_ids, self.padding_idx, 1)?;
+                    position_ids
+                }
+                
             }
         };
 
-        let input_embeddings : Tensor = match inputs_embeds {
+
+        let inputs_embeds : Tensor = match inputs_embeds {
             Some(embeds) => embeds.to_owned(),
             None => {
                 let embeds = self.word_embeddings.forward(input_ids)?;
@@ -248,7 +298,7 @@ impl RobertaEmbeddings {
         };
 
         let token_type_embeddings = self.token_type_embeddings.forward(token_type_ids)?;
-        let mut embeddings = (input_embeddings + token_type_embeddings)?;
+        let mut embeddings = (inputs_embeds + token_type_embeddings)?;
 
         if let Some(position_embeddings) = &self.position_embeddings {
             embeddings = embeddings.broadcast_add(&position_embeddings.forward(&position_ids)?)?
@@ -256,6 +306,10 @@ impl RobertaEmbeddings {
 
         let embeddings = self.layer_norm.forward(&embeddings)?;
         let embeddings = self.dropout.forward(&embeddings)?;
+
+        // println!("embeddings: {:?}", embeddings.shape());
+        // println!("embeddings: {:?}", embeddings.to_vec3::<f32>()?[0]);
+
         Ok(embeddings)
         
     }
@@ -363,7 +417,6 @@ impl RobertaSelfOutput {
     }
 }
 
-// https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L392
 struct RobertaAttention {
     self_attention: RobertaSelfAttention,
     self_output: RobertaSelfOutput,
@@ -386,7 +439,6 @@ impl RobertaAttention {
     }
 }
 
-// https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L441
 struct RobertaIntermediate {
     dense: Linear,
     intermediate_act: HiddenActLayer,
@@ -408,7 +460,6 @@ impl RobertaIntermediate {
     }
 }
 
-// https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L456
 struct RobertaOutput {
     dense: Linear,
     layer_norm: LayerNorm,
@@ -438,7 +489,6 @@ impl RobertaOutput {
     }
 }
 
-// https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L470
 struct RobertaLayer {
     attention: RobertaAttention,
     intermediate: RobertaIntermediate,
@@ -470,7 +520,6 @@ impl RobertaLayer {
     }
 }
 
-// https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L556
 struct RobertaEncoder {
     layers: Vec<RobertaLayer>,
 }
@@ -493,7 +542,6 @@ impl RobertaEncoder {
     }
 }
 
-// https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L874
 pub struct RobertaModel {
     embeddings: RobertaEmbeddings,
     encoder: RobertaEncoder,
@@ -534,4 +582,5 @@ impl RobertaModel {
         let sequence_output = self.encoder.forward(&embedding_output)?;
         Ok(sequence_output)
     }
+
 }
