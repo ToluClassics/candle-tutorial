@@ -8,12 +8,15 @@ with torch.no_grad():
     output = model(input_ids)[0]
 
 
+print(model)
+
+
 # output = output.squeeze(0)[0][:10]
 
-print(model.embeddings(input_ids).squeeze(0))
-print(model.embeddings(input_ids).shape)
+# print(model.embeddings(input_ids).squeeze(0))
+# print(model.embeddings(input_ids).shape)
 
-print(output[0])
+# print(output[0])
 
 # print(model.embeddings.position_embeddings.weight[0])
 
@@ -34,4 +37,4 @@ def create_position_ids_from_input_ids(input_ids, padding_idx, past_key_values_l
     incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask) + past_key_values_length) * mask
     return incremental_indices.long() + padding_idx
 
-print(create_position_ids_from_input_ids(input_ids, 1))
+# print(create_position_ids_from_input_ids(input_ids, 1))

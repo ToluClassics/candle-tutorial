@@ -126,7 +126,47 @@ We would be translating the [Pytorch Source Code](https://github.com/huggingface
 
 RoBERTa is a variant of the BERT model. Although both models have different pretraining approaches, structurally both models are very similar and the major difference between both models is that in the RoBERTa layer, Position numbers begin at padding_idx+1,  While in BERT, Position numbers begin at 0.
 
-Following the transformers PyTorch implementation,  RoBERTa Model can be divided into the 2 main parts:
+Following the transformers PyTorch implementation,  RoBERTa Model can be divided into the 2 main parts (embeddings and encoder):
+
+```
+RobertaModel(
+  (embeddings): RobertaEmbeddings(
+    (word_embeddings): Embedding(50265, 768, padding_idx=1)
+    (position_embeddings): Embedding(514, 768, padding_idx=1)
+    (token_type_embeddings): Embedding(1, 768)
+    (LayerNorm): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
+    (dropout): Dropout(p=0.1, inplace=False)
+  )
+  (encoder): RobertaEncoder(
+    (layer): ModuleList(
+      (0-11): 12 x RobertaLayer(
+        (attention): RobertaAttention(
+          (self): RobertaSelfAttention(
+            (query): Linear(in_features=768, out_features=768, bias=True)
+            (key): Linear(in_features=768, out_features=768, bias=True)
+            (value): Linear(in_features=768, out_features=768, bias=True)
+            (dropout): Dropout(p=0.1, inplace=False)
+          )
+          (output): RobertaSelfOutput(
+            (dense): Linear(in_features=768, out_features=768, bias=True)
+            (LayerNorm): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
+            (dropout): Dropout(p=0.1, inplace=False)
+          )
+        )
+        (intermediate): RobertaIntermediate(
+          (dense): Linear(in_features=768, out_features=3072, bias=True)
+          (intermediate_act_fn): GELUActivation()
+        )
+        (output): RobertaOutput(
+          (dense): Linear(in_features=3072, out_features=768, bias=True)
+          (LayerNorm): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
+          (dropout): Dropout(p=0.1, inplace=False)
+        )
+      )
+    )
+  )
+)
+```
 
 - <strong>Roberta Config</strong>: For Holding Model Configuration
 - <strong>Roberta Model (RobertaModel)</strong> : This is the main model class that contains the embedding and the encoder module.
@@ -180,6 +220,21 @@ Import the necessary modules from candle and other crates:
     ```
 
 ### a. Writing Building Blocks:
+
+- Linear/Embeddin: This is a helper function for loading the weights of a linear/embedding layer using `VarBuilder` from a checkpoint file. We create these 2 helper functions because we will use them multiple times:
+
+    ```rust
+    fn embedding(vocab_size: usize, hidden_size: usize, vb: VarBuilder) -> Result<Embedding> {
+        let embeddings = vb.get((vocab_size, hidden_size), "weight")?;
+        Ok(Embedding::new(embeddings, hidden_size))
+    }
+
+    fn linear(size1: usize, size2: usize, vb: VarBuilder) -> Result<Linear> {
+        let weight = vb.get((size2, size1), "weight")?;
+        let bias = vb.get(size2, "bias")?;
+        Ok(Linear::new(weight, Some(bias)))
+    }
+    ```
 
 - Layer Norm (https://pytorch.org/docs/stable/generated/torch.nn.LayerNorm.html): Used to a normalize a tensor over a given axis. It is used in the embedding layer and the encoder layer. A good explanation of layer normalization can be [found here](https://www.pinecone.io/learn/batch-layer-normalization/#What-is-Layer-Normalization). This is required because we need to implement the low-level layer norm module in Candle.
 
@@ -327,9 +382,10 @@ Import the necessary modules from candle and other crates:
         let activation_tensor = activation.forward(&input_tensor)?;
         ```
 
+
 ### b. Roberta Config:
 
-Up next is the Roberta Config. This is a struct that holds the configuration of the model. It is similar to the [RobertaConfig](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/configuration_roberta.py#L37) in the transformers library. For this Struct, We will initialize the default values for the config (We implement the `Default` trait for the `RobertaConfig` struct ) and then use the serde crate to deserialize the config from a json file.
+Up next is the Roberta Config. This is a struct that holds the configuration of the model. It is similar to the [RobertaConfig](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/configuration_roberta.py#L37) in the transformers library. For this Struct, We will initialize the default values for the config (We implement the `Default` trait for the `RobertaConfig` struct ) and then use the serde crate to deserialize the config from a json file. Alternatively we can create a `RobertaConfig::new()` method for creating a new instance of RobertaConfig
 
 ```rust
 pub struct RobertaConfig {
@@ -379,6 +435,83 @@ impl Default for RobertaConfig {
 }
 ```
 
-### b. RobertaEmbeddings:
+### c. RobertaEmbeddings:
+[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L65)
 
-```
+In the `__init__` function of the embedding class, we have 3 linear layers for processing word_embeddings, position_embeddings and token_type_ids. Similar to the PyTorch implementation, there are two important class methods that we need to implement.
+
+- [create_position_ids_from_input_embeds](https://github.com/huggingface/transformers/blob/46092f763d26eb938a937c2a9cc69ce1cb6c44c2/src/transformers/models/roberta/modeling_roberta.py#L136): A function to generate position ids from embeddings. I have included the pytorch equivalent of each line as a comment.
+
+    ```rust
+    pub fn create_position_ids_from_input_embeds(&self, input_embeds: &Tensor) -> Result<Tensor> {
+        let input_shape = input_embeds.dims3()?; // input_shape = inputs_embeds.size()
+        let seq_length = input_shape.1; // sequence_length = input_shape[1]
+
+        // position_ids = torch.arange( self.padding_idx + 1, sequence_length + self.padding_idx + 1, dtype=torch.long, device=inputs_embeds.device)
+        let mut position_ids = Tensor::arange(
+            self.padding_idx + 1,
+            seq_length as u32 + self.padding_idx + 1,
+            &Device::Cpu,
+        )?;
+
+        // return position_ids.unsqueeze(0).expand(input_shape)
+        position_ids = position_ids
+            .unsqueeze(0)?
+            .expand((input_shape.0, input_shape.1))?;
+        Ok(position_ids)
+    }
+    ```
+- [create_position_ids_from_input_ids](https://github.com/huggingface/transformers/blob/46092f763d26eb938a937c2a9cc69ce1cb6c44c2/src/transformers/models/roberta/modeling_roberta.py#L1558): A function to generate position_ids from input_ids.
+
+    ```rust
+    pub fn create_position_ids_from_input_ids(input_ids: &Tensor, padding_idx: u32, past_key_values_length: u8) -> Result<Tensor> {
+
+        let mask = input_ids.ne(padding_idx)?; // mask = input_ids.ne(padding_idx).int()
+        let incremental_indices = cumsum_2d(&mask, 0, input_ids.device())?; // incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask) + past_key_values_length) * mask
+
+        let incremental_indices = incremental_indices.broadcast_add(&Tensor::new(&[past_key_values_length], input_ids.device())?)?; // incremental_indices.long() + padding_idx
+
+        Ok(incremental_indices)
+    }
+    ```
+
+### d. RobertaSelfAttention:
+[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L155)
+
+...
+
+### e. RobertaSelfOutput:
+[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L290)
+
+...
+
+### f. RobertaAttention:
+[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L305)
+
+...
+
+### g. RobertaIntermediate
+[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L355)
+
+...
+
+### h. RobertaOutput
+[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L371)
+
+...
+
+### i. RobertaLayer
+[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L386)
+
+...
+
+### j. RobertaEncoder
+[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L473)
+
+...
+
+### k. RobertaModel
+[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L691)
+
+...
+
