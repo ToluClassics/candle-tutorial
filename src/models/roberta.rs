@@ -307,9 +307,6 @@ impl RobertaEmbeddings {
         let embeddings = self.layer_norm.forward(&embeddings)?;
         let embeddings = self.dropout.forward(&embeddings)?;
 
-        // println!("embeddings: {:?}", embeddings.shape());
-        // println!("embeddings: {:?}", embeddings.to_vec3::<f32>()?[0]);
-
         Ok(embeddings)
         
     }

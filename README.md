@@ -475,20 +475,239 @@ In the `__init__` function of the embedding class, we have 3 linear layers for p
     }
     ```
 
+- [Embedding Layer]
+    ```rust
+    pub struct RobertaEmbeddings {
+        word_embeddings: Embedding,
+        position_embeddings: Option<Embedding>,
+        token_type_embeddings: Embedding,
+        layer_norm: LayerNorm,
+        dropout: Dropout,
+        pub padding_idx: u32,
+    }
+
+    impl RobertaEmbeddings {
+        pub fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+
+            // nn.Embedding(config.vocab_size, config.hidden_size)
+            let word_embeddings = embedding(
+                config.vocab_size,
+                config.hidden_size,
+                vb.pp("word_embeddings"),
+            )?;
+
+            // nn.Embedding(config.max_position_embeddings, config.hidden_size)
+            let position_embeddings = embedding(
+                config.max_position_embeddings,
+                config.hidden_size,
+                vb.pp("position_embeddings"),
+            )?;
+
+            // nn.Embedding(config.type_vocab_size, config.hidden_size)
+            let token_type_embeddings = embedding(
+                config.type_vocab_size,
+                config.hidden_size,
+                vb.pp("token_type_embeddings"),
+            )?;
+
+            // nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+            let layer_norm = layer_norm(
+                config.hidden_size,
+                config.layer_norm_eps,
+                vb.pp("LayerNorm"),
+            )?;
+
+            // nn.Dropout(config.hidden_dropout_prob)
+            let dropout = Dropout::new(config.hidden_dropout_prob);
+            
+            let padding_idx = config.pad_token_id as u32;
+
+            Ok(Self {
+                word_embeddings,
+                position_embeddings: Some(position_embeddings),
+                token_type_embeddings,
+                layer_norm,
+                dropout,
+                padding_idx,
+            })
+        }
+
+        pub fn forward(&self, input_ids: &Tensor, token_type_ids: &Tensor, position_ids: Option<&Tensor>, inputs_embeds: Option<&Tensor>) -> Result<Tensor> {
+
+            let position_ids = match position_ids {
+                Some(ids) => ids.to_owned(),
+                None => {
+                    if Option::is_some(&inputs_embeds){
+                        let position_ids = self.create_position_ids_from_input_embeds(inputs_embeds.unwrap())?;
+                        position_ids
+                    } else {
+                        let position_ids = create_position_ids_from_input_ids(input_ids, self.padding_idx, 1)?;
+                        position_ids
+                    } 
+                }
+            };
+
+
+            let inputs_embeds : Tensor = match inputs_embeds {
+                Some(embeds) => embeds.to_owned(),
+                None => {
+                    let embeds = self.word_embeddings.forward(input_ids)?; // self.word_embeddings(input_ids)
+                    embeds
+                }
+            };
+
+            let token_type_embeddings = self.token_type_embeddings.forward(token_type_ids)?; // self.token_type_embeddings(token_type_ids)
+            let mut embeddings = (inputs_embeds + token_type_embeddings)?; //inputs_embeds + token_type_embeddings
+
+            if let Some(position_embeddings) = &self.position_embeddings {
+                embeddings = embeddings.broadcast_add(&position_embeddings.forward(&position_ids)?)? // embeddings + self.position_embeddings(position_ids)
+            }
+
+            let embeddings = self.layer_norm.forward(&embeddings)?; //self.LayerNorm(embeddings)
+            let embeddings = self.dropout.forward(&embeddings)?; // self.dropout(embeddings)
+
+            Ok(embeddings)
+            
+        }
+    }
+    ```
+
 ### d. RobertaSelfAttention:
 [HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L155)
 
-...
+```rust
+struct RobertaSelfAttention {
+    query: Linear,
+    key: Linear,
+    value: Linear,
+    dropout: Dropout,
+    num_attention_heads: usize,
+    attention_head_size: usize,
+}
+
+impl RobertaSelfAttention {
+    fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+        let attention_head_size = config.hidden_size / config.num_attention_heads; // config.hidden_size / config.num_attention_heads
+        let all_head_size = config.num_attention_heads * attention_head_size; // self.num_attention_heads * self.attention_head_size
+        let dropout = Dropout::new(config.hidden_dropout_prob); // nn.Dropout(config.attention_probs_dropout_prob)
+        let hidden_size = config.hidden_size;
+
+        let query = linear(hidden_size, all_head_size, vb.pp("query"))?; // nn.Linear(config.hidden_size, self.all_head_size)
+        let value = linear(hidden_size, all_head_size, vb.pp("value"))?; // nn.Linear(config.hidden_size, self.all_head_size)
+        let key = linear(hidden_size, all_head_size, vb.pp("key"))?; // nn.Linear(config.hidden_size, self.all_head_size)
+        Ok(Self {
+            query,
+            key,
+            value,
+            dropout,
+            num_attention_heads: config.num_attention_heads,
+            attention_head_size,
+        })
+    }
+
+    fn transpose_for_scores(&self, xs: &Tensor) -> Result<Tensor> {
+        
+        // x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
+        let mut new_x_shape = xs.dims().to_vec();
+        new_x_shape.pop();
+        new_x_shape.push(self.num_attention_heads);
+        new_x_shape.push(self.attention_head_size);
+
+        //  x = x.view(new_x_shape) || x.permute(0, 2, 1, 3)
+        let xs = xs.reshape(new_x_shape.as_slice())?.transpose(1, 2)?;
+        xs.contiguous()
+    }
+
+    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+        let query_layer = self.query.forward(hidden_states)?; // self.query(hidden_states)
+        let key_layer = self.key.forward(hidden_states)?; // self.key(hidden_states)
+        let value_layer = self.value.forward(hidden_states)?; // self.value(hidden_states)
+
+        let query_layer = self.transpose_for_scores(&query_layer)?; // self.transpose_for_scores(query_layer)
+        let key_layer = self.transpose_for_scores(&key_layer)?; // self.transpose_for_scores(key_layer)
+        let value_layer = self.transpose_for_scores(&value_layer)?; // self.transpose_for_scores(value_layer)
+
+        let attention_scores = query_layer.matmul(&key_layer.t()?)?; // attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
+        let attention_scores = (attention_scores / (self.attention_head_size as f64).sqrt())?; // attention_scores / math.sqrt(self.attention_head_size)
+        let attention_probs = {
+            candle_nn::ops::softmax(&attention_scores, candle_core::D::Minus1)?
+        }; // attention_probs = nn.functional.softmax(attention_scores, dim=-1)
+        let attention_probs = self.dropout.forward(&attention_probs)?; // attention_probs = self.dropout(attention_probs)
+
+        let context_layer = attention_probs.matmul(&value_layer)?; // torch.matmul(attention_probs, value_layer)
+        let context_layer = context_layer.transpose(1, 2)?.contiguous()?; // context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
+
+        // new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
+        // context_layer = context_layer.view(new_context_layer_shape)
+        let context_layer = context_layer.flatten_from(candle_core::D::Minus2)?; // 
+        Ok(context_layer)
+    }
+}
+```
 
 ### e. RobertaSelfOutput:
 [HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L290)
 
-...
+```rust
+struct RobertaSelfOutput {
+    dense: Linear,
+    layer_norm: LayerNorm,
+    dropout: Dropout,
+}
+
+impl RobertaSelfOutput {
+    fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+        let dense = linear(config.hidden_size, config.hidden_size, vb.pp("dense"))?; // nn.Linear(config.hidden_size, config.hidden_size)
+        let layer_norm = layer_norm(
+            config.hidden_size,
+            config.layer_norm_eps,
+            vb.pp("LayerNorm"),
+        )?; //  nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+
+        let dropout = Dropout::new(config.hidden_dropout_prob); // nn.Dropout(config.hidden_dropout_prob)
+        Ok(Self {
+            dense,
+            layer_norm,
+            dropout,
+        })
+    }
+
+    fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
+        let hidden_states = self.dense.forward(hidden_states)?; // self.dense(hidden_states)
+        let hidden_states = self.dropout.forward(&hidden_states)?; // self.dropout(hidden_states)
+        self.layer_norm.forward(&(hidden_states + input_tensor)?) // self.LayerNorm(hidden_states + input_tensor)
+    }
+}
+```
 
 ### f. RobertaAttention:
 [HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L305)
 
-...
+```rust
+struct RobertaAttention {
+    self_attention: RobertaSelfAttention, 
+    self_output: RobertaSelfOutput,
+}
+
+impl RobertaAttention {
+    fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+        let self_attention = RobertaSelfAttention::load(vb.pp("self"), config)?; // RobertaSelfAttention(config, position_embedding_type=position_embedding_type)
+        let self_output = RobertaSelfOutput::load(vb.pp("output"), config)?; // RobertaSelfOutput(config)
+
+        Ok(Self {
+            self_attention,
+            self_output,
+        })
+    }
+
+    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+        let self_outputs = self.self_attention.forward(hidden_states)?; //self_outputs = self.self(hidden_states)
+        let attention_output = self.self_output.forward(&self_outputs, hidden_states)?; // attention_output = self.output(self_outputs[0], hidden_states)
+        
+        Ok(attention_output)
+    }
+}
+```
 
 ### g. RobertaIntermediate
 [HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L355)
