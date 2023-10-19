@@ -4,6 +4,7 @@
 
 This repo provides some guide for converting pytorch models from the transformers library to Candle by directly translating the pytorch code to Candle ...
 
+❗️❗️: To make the code easily understandable, I have annotated each line of the Rust/Candle code with the equivalent PyTorch code.
 Tutorial Structure:
 - [Getting Started](#getting-started)
     - [0. Important things to note](#0-important-things-to-note)
