@@ -78,11 +78,7 @@ pub struct LayerNorm {
 
 impl LayerNorm {
     pub fn new(weight: Tensor, bias: Tensor, eps: f64) -> Self {
-        Self {
-            weight,
-            bias,
-            eps,
-        }
+        Self { weight, bias, eps }
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
@@ -161,7 +157,6 @@ impl Default for RobertaConfig {
 }
 
 fn cumsum_2d(mask: &Tensor, dim: u8, device: &Device) -> Result<Tensor> {
-
     let mask = mask.to_vec2::<u8>()?;
 
     let rows = mask.len();
@@ -170,20 +165,22 @@ fn cumsum_2d(mask: &Tensor, dim: u8, device: &Device) -> Result<Tensor> {
     let mut result = mask.clone();
 
     match dim {
-        0 => {  // Cumulative sum along rows
+        0 => {
+            // Cumulative sum along rows
             for i in 0..rows {
                 for j in 1..cols {
                     result[i][j] += result[i][j - 1];
                 }
             }
-        },
-        1 => {  // Cumulative sum along columns
+        }
+        1 => {
+            // Cumulative sum along columns
             for j in 0..cols {
                 for i in 1..rows {
                     result[i][j] += result[i - 1][j];
                 }
             }
-        },
+        }
         _ => panic!("Dimension not supported"),
     }
 
@@ -192,17 +189,19 @@ fn cumsum_2d(mask: &Tensor, dim: u8, device: &Device) -> Result<Tensor> {
     Ok(result)
 }
 
-
-pub fn create_position_ids_from_input_ids(input_ids: &Tensor, padding_idx: u32, past_key_values_length: u8) -> Result<Tensor> {
-
+pub fn create_position_ids_from_input_ids(
+    input_ids: &Tensor,
+    padding_idx: u32,
+    past_key_values_length: u8,
+) -> Result<Tensor> {
     let mask = input_ids.ne(padding_idx)?;
     let incremental_indices = cumsum_2d(&mask, 0, input_ids.device())?;
 
-    let incremental_indices = incremental_indices.broadcast_add(&Tensor::new(&[past_key_values_length], input_ids.device())?)?;
+    let incremental_indices = incremental_indices
+        .broadcast_add(&Tensor::new(&[past_key_values_length], input_ids.device())?)?;
 
     Ok(incremental_indices)
 }
-
 
 fn embedding(vocab_size: usize, hidden_size: usize, vb: VarBuilder) -> Result<Embedding> {
     let embeddings = vb.get((vocab_size, hidden_size), "weight")?;
@@ -272,24 +271,29 @@ impl RobertaEmbeddings {
         })
     }
 
-    pub fn forward(&self, input_ids: &Tensor, token_type_ids: &Tensor, position_ids: Option<&Tensor>, inputs_embeds: Option<&Tensor>) -> Result<Tensor> {
-
+    pub fn forward(
+        &self,
+        input_ids: &Tensor,
+        token_type_ids: &Tensor,
+        position_ids: Option<&Tensor>,
+        inputs_embeds: Option<&Tensor>,
+    ) -> Result<Tensor> {
         let position_ids = match position_ids {
             Some(ids) => ids.to_owned(),
             None => {
-                if Option::is_some(&inputs_embeds){
-                    let position_ids = self.create_position_ids_from_input_embeds(inputs_embeds.unwrap())?;
+                if Option::is_some(&inputs_embeds) {
+                    let position_ids =
+                        self.create_position_ids_from_input_embeds(inputs_embeds.unwrap())?;
                     position_ids
                 } else {
-                    let position_ids = create_position_ids_from_input_ids(input_ids, self.padding_idx, 1)?;
+                    let position_ids =
+                        create_position_ids_from_input_ids(input_ids, self.padding_idx, 1)?;
                     position_ids
                 }
-                
             }
         };
 
-
-        let inputs_embeds : Tensor = match inputs_embeds {
+        let inputs_embeds: Tensor = match inputs_embeds {
             Some(embeds) => embeds.to_owned(),
             None => {
                 let embeds = self.word_embeddings.forward(input_ids)?;
@@ -308,7 +312,6 @@ impl RobertaEmbeddings {
         let embeddings = self.dropout.forward(&embeddings)?;
 
         Ok(embeddings)
-        
     }
 
     pub fn create_position_ids_from_input_embeds(&self, input_embeds: &Tensor) -> Result<Tensor> {
@@ -316,11 +319,17 @@ impl RobertaEmbeddings {
         let seq_length = input_shape.1;
 
         println!("seq_length: {:?}", seq_length);
-        let mut position_ids = Tensor::arange(self.padding_idx + 1, seq_length as u32 + self.padding_idx + 1, &Device::Cpu)?;
+        let mut position_ids = Tensor::arange(
+            self.padding_idx + 1,
+            seq_length as u32 + self.padding_idx + 1,
+            &Device::Cpu,
+        )?;
 
         println!("position_ids: {:?}", position_ids);
 
-        position_ids = position_ids.unsqueeze(0)?.expand((input_shape.0, input_shape.1 ))?;
+        position_ids = position_ids
+            .unsqueeze(0)?
+            .expand((input_shape.0, input_shape.1))?;
         Ok(position_ids)
     }
 }
@@ -373,9 +382,8 @@ impl RobertaSelfAttention {
 
         let attention_scores = query_layer.matmul(&key_layer.t()?)?;
         let attention_scores = (attention_scores / (self.attention_head_size as f64).sqrt())?;
-        let attention_probs = {
-            candle_nn::ops::softmax(&attention_scores, candle_core::D::Minus1)?
-        };
+        let attention_probs =
+            { candle_nn::ops::softmax(&attention_scores, candle_core::D::Minus1)? };
         let attention_probs = self.dropout.forward(&attention_probs)?;
 
         let context_layer = attention_probs.matmul(&value_layer)?;
@@ -529,7 +537,6 @@ impl RobertaEncoder {
 
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
         let mut hidden_states = hidden_states.clone();
-        // Use a loop rather than a fold as it's easier to modify when adding debug/...
         for layer in self.layers.iter() {
             hidden_states = layer.forward(&hidden_states)?
         }
@@ -573,11 +580,12 @@ impl RobertaModel {
     }
 
     pub fn forward(&self, input_ids: &Tensor, token_type_ids: &Tensor) -> Result<Tensor> {
-        let embedding_output = self.embeddings.forward(input_ids, token_type_ids, None, None)?;
+        let embedding_output = self
+            .embeddings
+            .forward(input_ids, token_type_ids, None, None)?;
         let sequence_output = self.encoder.forward(&embedding_output)?;
         Ok(sequence_output)
     }
-
 }
 
 struct RobertaForMultipleChoice {}

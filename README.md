@@ -4,13 +4,36 @@
 
 This repo provides some guide for converting pytorch models from the transformers library to Candle by directly translating the pytorch code to Candle ...
 
+Tutorial Structure:
+- [Getting Started](#getting-started)
+    - [0. Important things to note](#0-important-things-to-note)
+    - [1. Start a new rust project](#1-start-a-new-rust-project)
+    - [2. Install Candle & Other Packages](#2-install-candle--other-packages)
+
+- [Parallels between Pytorch and Candle](#parallels-between-pytorch-and-candle)
+    - [Tensors](#tensors)
+    - [Tensor Operations](#tensor-operations)
+- [Translating a PyTorch Transformer Model into Candle](#translating-a-pytorch-transformer-model-into-candle)
+    - [RoBERTa](#31-roberta)
+        - [a. Writing Building Blocks](#a-writing-building-blocks)
+        - [b. Roberta Config](#b-roberta-config)
+        - [c. RobertaEmbeddings](#c-robertaembeddings)
+        - [d. RobertaSelfAttention](#d-robertaselfattention)
+        - [e. RobertaSelfOutput](#e-robertaselfoutput)
+        - [f. RobertaIntermediate](#f-robertaintermediate)
+        - [g. RobertaOutput](#g-robertaoutput)
+        - [h. RobertaLayer](#h-robertalayer)
+        - [i. RobertaEncoder](#i-robertaencoder)
+        - [j. RobertaModel](#j-robertamodel)
+- 
+
 ## Getting Started:
 
 ### 0. Important things to note
 
-- When Porting an already trained checkpoint to Candle, there's a bunch of PyTorch code that are not relevant and they are mostly included for handling different scenarios in training. It's definitely beneficial to know which functions to bypass if the code is mostly geared towards loading an already trained model.
+- When Porting an already trained checkpoint to Candle, there's a bunch of PyTorch code that are not relevant and they are mostly included for handling different scenarios in training. It's definitely beneficial to know which functions to bypass if the conversion effort is mostly geared towards loading an already trained model.
 
-- Python Built in Method: Unlike Python where we have built-in methods like `__call__` that allow us to use a class as a method and `__init__` for initializing a class, In rust we have to explicitly define methods like `Class::new()` to initialize a class and `CLass::forward` to perform a forward pass. This is going to be a recurrent theme in most of the classes below.
+- Python Built in Method: Unlike Python where we have built-in methods like `__call__` that allow us to use a class as a method and `__init__` for initializing a class, In rust we have to explicitly define methods like `Class::new()` to initialize a class and `Class::forward()` to perform a forward pass. This is going to be a recurrent theme in most of the classes below.
 
 - It is important to write [unit tests](tests/test_roberta.rs) after writing most or every module to ensure that input and output shapes in Candle are consistent with the same module in pytorch
 
@@ -115,16 +138,20 @@ The examples shows below can be found [here]();
         ```
     - Candle
         ```rust
-        println!("tensor shape: {:?}", tensor.shape().dims()); // 1 dimensional tensor
-        println!("tensor shape: {:?}", tensor.shape().dims2()); // 2 dimensional tensor
-        println!("tensor shape: {:?}", tensor.shape().dims3()); // 3 dimensional tensor
+        // 1 dimensional tensor
+        println!("tensor shape: {:?}", tensor.shape().dims()); 
+        // 2 dimensional tensor
+        println!("tensor shape: {:?}", tensor.shape().dims2()); 
+        // 3 dimensional tensor
+        println!("tensor shape: {:?}", tensor.shape().dims3()); 
         ```
 
-- Tensor Operations: Performing tensor operations is pretty similar across both frameworks;
+###  Tensor Operations: 
 
-    Some examples can be found here:: [CheatSheet](https://github.com/huggingface/candle/blob/main/README.md#how-to-use)
+    Performing tensor operations is pretty similar across both frameworks
+    Some examples can be found here:: [Candle CheatSheet](https://github.com/huggingface/candle/blob/main/README.md#how-to-use)
 
-- [Simple MLP Training](https://huggingface.github.io/candle/training/simplified.html)
+
 
 
 ## 3. Translating a PyTorch Transformer Model into Candle
@@ -132,6 +159,8 @@ The examples shows below can be found [here]();
 Here's the fun part! In this section we are going to take a look at translating models from the transformers library to candle. We would be using the [RoBERTa](https://huggingface.co/transformers/model_doc/roberta.html) and [XLM-Roberta](https://huggingface.co/docs/transformers/model_doc/xlm-roberta) model for this tutorial.
 
 We would be translating the [Pytorch Source Code](https://github.com/huggingface/transformers/blob/main/src/transformers/models/roberta/modeling_roberta.py) into Candle Code and then load the pretrained checkpoint into Rust and compare the output from  both frameworks.
+
+Note ❗️❗️: To make the code easily understandable, I have annotated each line of the Rust/Candle code with the equivalent PyTorch code.
 
 ### 3.1. RoBERTa
 
@@ -455,10 +484,14 @@ In the `__init__` function of the embedding class, we have 3 linear layers for p
 
     ```rust
     pub fn create_position_ids_from_input_embeds(&self, input_embeds: &Tensor) -> Result<Tensor> {
-        let input_shape = input_embeds.dims3()?; // input_shape = inputs_embeds.size()
-        let seq_length = input_shape.1; // sequence_length = input_shape[1]
+        // input_shape = inputs_embeds.size()
+        // In candle, we use dims3() for getting the size of a 3 dimensional tensor
+        let input_shape = input_embeds.dims3()?;
+        // sequence_length = input_shape[1]
+        let seq_length = input_shape.1;
 
-        // position_ids = torch.arange( self.padding_idx + 1, sequence_length + self.padding_idx + 1, dtype=torch.long, device=inputs_embeds.device)
+        // position_ids = torch.arange( self.padding_idx + 1, sequence_length + self.padding_idx + 1, \
+        // dtype=torch.long, device=inputs_embeds.device)
         let mut position_ids = Tensor::arange(
             self.padding_idx + 1,
             seq_length as u32 + self.padding_idx + 1,
@@ -472,21 +505,24 @@ In the `__init__` function of the embedding class, we have 3 linear layers for p
         Ok(position_ids)
     }
     ```
-- [create_position_ids_from_input_ids](https://github.com/huggingface/transformers/blob/46092f763d26eb938a937c2a9cc69ce1cb6c44c2/src/transformers/models/roberta/modeling_roberta.py#L1558): A function to generate position_ids from input_ids.
+- [create_position_ids_from_input_ids](https://github.com/huggingface/transformers/blob/46092f763d26eb938a937c2a9cc69ce1cb6c44c2/src/transformers/models/roberta/modeling_roberta.py#L1558): A function to generate position_ids from input_ids. 
 
     ```rust
     pub fn create_position_ids_from_input_ids(input_ids: &Tensor, padding_idx: u32, past_key_values_length: u8) -> Result<Tensor> {
+        // mask = input_ids.ne(padding_idx).int()
+        let mask = input_ids.ne(padding_idx)?; 
+        // incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask) + past_key_values_length) * mask
+        let incremental_indices = cumsum_2d(&mask, 0, input_ids.device())?; 
 
-        let mask = input_ids.ne(padding_idx)?; // mask = input_ids.ne(padding_idx).int()
-        let incremental_indices = cumsum_2d(&mask, 0, input_ids.device())?; // incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask) + past_key_values_length) * mask
-
-        let incremental_indices = incremental_indices.broadcast_add(&Tensor::new(&[past_key_values_length], input_ids.device())?)?; // incremental_indices.long() + padding_idx
+        // incremental_indices.long() + padding_idx
+        let incremental_indices = incremental_indices.broadcast_add(&Tensor::new(&[past_key_values_length], input_ids.device())?)?; 
 
         Ok(incremental_indices)
     }
     ```
 
-- [Embedding Layer]
+- [Embedding Layer] : The embedding layer is made up of 3 linear layers for processing word_embeddings, position_embeddings and token_type_ids. The output of the embedding layer is the sum of the word_embeddings, position_embeddings and token_type_embeddings. The output is then passed through a layer norm and dropout layer. A link to the pytorch implementation is shown above.
+
     ```rust
     pub struct RobertaEmbeddings {
         word_embeddings: Embedding,
@@ -549,10 +585,12 @@ In the `__init__` function of the embedding class, we have 3 linear layers for p
                 Some(ids) => ids.to_owned(),
                 None => {
                     if Option::is_some(&inputs_embeds){
-                        let position_ids = self.create_position_ids_from_input_embeds(inputs_embeds.unwrap())?;
+                        // self.create_position_ids_from_inputs_embeds(inputs_embeds)
+                        let position_ids = self.create_position_ids_from_input_embeds(inputs_embeds.unwrap())?; //
                         position_ids
                     } else {
-                        let position_ids = create_position_ids_from_input_ids(input_ids, self.padding_idx, 1)?;
+                        // create_position_ids_from_input_ids(input_ids, self.padding_idx, past_key_values_length)
+                        let position_ids = create_position_ids_from_input_ids(input_ids, self.padding_idx, 1)?; 
                         position_ids
                     } 
                 }
@@ -562,20 +600,26 @@ In the `__init__` function of the embedding class, we have 3 linear layers for p
             let inputs_embeds : Tensor = match inputs_embeds {
                 Some(embeds) => embeds.to_owned(),
                 None => {
-                    let embeds = self.word_embeddings.forward(input_ids)?; // self.word_embeddings(input_ids)
+                    // self.word_embeddings(input_ids)
+                    let embeds = self.word_embeddings.forward(input_ids)?; 
                     embeds
                 }
             };
 
-            let token_type_embeddings = self.token_type_embeddings.forward(token_type_ids)?; // self.token_type_embeddings(token_type_ids)
-            let mut embeddings = (inputs_embeds + token_type_embeddings)?; //inputs_embeds + token_type_embeddings
+            // self.token_type_embeddings(token_type_ids)
+            let token_type_embeddings = self.token_type_embeddings.forward(token_type_ids)?; 
+            // inputs_embeds + token_type_embeddings
+            let mut embeddings = (inputs_embeds + token_type_embeddings)?; 
 
             if let Some(position_embeddings) = &self.position_embeddings {
-                embeddings = embeddings.broadcast_add(&position_embeddings.forward(&position_ids)?)? // embeddings + self.position_embeddings(position_ids)
+                // embeddings + self.position_embeddings(position_ids)
+                embeddings = embeddings.broadcast_add(&position_embeddings.forward(&position_ids)?)? 
             }
 
-            let embeddings = self.layer_norm.forward(&embeddings)?; //self.LayerNorm(embeddings)
-            let embeddings = self.dropout.forward(&embeddings)?; // self.dropout(embeddings)
+            // self.LayerNorm(embeddings)
+            let embeddings = self.layer_norm.forward(&embeddings)?; 
+            // self.dropout(embeddings)
+            let embeddings = self.dropout.forward(&embeddings)?; 
 
             Ok(embeddings)
             
@@ -584,7 +628,9 @@ In the `__init__` function of the embedding class, we have 3 linear layers for p
     ```
 
 ### d. RobertaSelfAttention:
-[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L155)
+[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L155). The self attention layer is made up of 3 linear layers for processing the query, key and value. The output of the self attention layer is the dot product of the query and key. The output is then passed through a softmax layer and a dropout layer which is then multiplied by the value.
+
+```rust
 
 ```rust
 struct RobertaSelfAttention {
@@ -598,14 +644,20 @@ struct RobertaSelfAttention {
 
 impl RobertaSelfAttention {
     fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
-        let attention_head_size = config.hidden_size / config.num_attention_heads; // config.hidden_size / config.num_attention_heads
-        let all_head_size = config.num_attention_heads * attention_head_size; // self.num_attention_heads * self.attention_head_size
-        let dropout = Dropout::new(config.hidden_dropout_prob); // nn.Dropout(config.attention_probs_dropout_prob)
+        // config.hidden_size / config.num_attention_heads
+        let attention_head_size = config.hidden_size / config.num_attention_heads;
+        // self.num_attention_heads * self.attention_head_size
+        let all_head_size = config.num_attention_heads * attention_head_size; 
+        // nn.Dropout(config.attention_probs_dropout_prob)
+        let dropout = Dropout::new(config.hidden_dropout_prob); 
         let hidden_size = config.hidden_size;
 
-        let query = linear(hidden_size, all_head_size, vb.pp("query"))?; // nn.Linear(config.hidden_size, self.all_head_size)
-        let value = linear(hidden_size, all_head_size, vb.pp("value"))?; // nn.Linear(config.hidden_size, self.all_head_size)
-        let key = linear(hidden_size, all_head_size, vb.pp("key"))?; // nn.Linear(config.hidden_size, self.all_head_size)
+        // nn.Linear(config.hidden_size, self.all_head_size)
+        let query = linear(hidden_size, all_head_size, vb.pp("query"))?; 
+        // nn.Linear(config.hidden_size, self.all_head_size)
+        let value = linear(hidden_size, all_head_size, vb.pp("value"))?; 
+        // nn.Linear(config.hidden_size, self.all_head_size)
+        let key = linear(hidden_size, all_head_size, vb.pp("key"))?; 
         Ok(Self {
             query,
             key,
@@ -630,23 +682,33 @@ impl RobertaSelfAttention {
     }
 
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
-        let query_layer = self.query.forward(hidden_states)?; // self.query(hidden_states)
-        let key_layer = self.key.forward(hidden_states)?; // self.key(hidden_states)
-        let value_layer = self.value.forward(hidden_states)?; // self.value(hidden_states)
+        // self.query(hidden_states)
+        let query_layer = self.query.forward(hidden_states)?;
+        // self.key(hidden_states) 
+        let key_layer = self.key.forward(hidden_states)?; 
+        // self.value(hidden_states)
+        let value_layer = self.value.forward(hidden_states)?; 
 
-        let query_layer = self.transpose_for_scores(&query_layer)?; // self.transpose_for_scores(query_layer)
-        let key_layer = self.transpose_for_scores(&key_layer)?; // self.transpose_for_scores(key_layer)
-        let value_layer = self.transpose_for_scores(&value_layer)?; // self.transpose_for_scores(value_layer)
+        // self.transpose_for_scores(query_layer)
+        let query_layer = self.transpose_for_scores(&query_layer)?;
+        // self.transpose_for_scores(key_layer) 
+        let key_layer = self.transpose_for_scores(&key_layer)?;
+        // self.transpose_for_scores(value_layer)
+        let value_layer = self.transpose_for_scores(&value_layer)?; 
 
-        let attention_scores = query_layer.matmul(&key_layer.t()?)?; // attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
-        let attention_scores = (attention_scores / (self.attention_head_size as f64).sqrt())?; // attention_scores / math.sqrt(self.attention_head_size)
-        let attention_probs = {
-            candle_nn::ops::softmax(&attention_scores, candle_core::D::Minus1)?
-        }; // attention_probs = nn.functional.softmax(attention_scores, dim=-1)
-        let attention_probs = self.dropout.forward(&attention_probs)?; // attention_probs = self.dropout(attention_probs)
+        // attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
+        let attention_scores = query_layer.matmul(&key_layer.t()?)?;
+        // attention_scores / math.sqrt(self.attention_head_size)
+        let attention_scores = (attention_scores / (self.attention_head_size as f64).sqrt())?; 
+        // attention_probs = nn.functional.softmax(attention_scores, dim=-1)
+        let attention_probs = {candle_nn::ops::softmax(&attention_scores, candle_core::D::Minus1)?}; 
+        // attention_probs = self.dropout(attention_probs)
+        let attention_probs = self.dropout.forward(&attention_probs)?; 
 
-        let context_layer = attention_probs.matmul(&value_layer)?; // torch.matmul(attention_probs, value_layer)
-        let context_layer = context_layer.transpose(1, 2)?.contiguous()?; // context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
+        // torch.matmul(attention_probs, value_layer)
+        let context_layer = attention_probs.matmul(&value_layer)?;
+        // context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
+        let context_layer = context_layer.transpose(1, 2)?.contiguous()?; 
 
         // new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
         // context_layer = context_layer.view(new_context_layer_shape)
@@ -657,7 +719,7 @@ impl RobertaSelfAttention {
 ```
 
 ### e. RobertaSelfOutput:
-[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L290)
+[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L290). The output of the Self Attention Layer is passed through the Self Output layer which is made up of a linear layer, layer norm and dropout layer.
 
 ```rust
 struct RobertaSelfOutput {
@@ -668,14 +730,17 @@ struct RobertaSelfOutput {
 
 impl RobertaSelfOutput {
     fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
-        let dense = linear(config.hidden_size, config.hidden_size, vb.pp("dense"))?; // nn.Linear(config.hidden_size, config.hidden_size)
+        // nn.Linear(config.hidden_size, config.hidden_size)
+        let dense = linear(config.hidden_size, config.hidden_size, vb.pp("dense"))?; 
+        //  nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         let layer_norm = layer_norm(
             config.hidden_size,
             config.layer_norm_eps,
             vb.pp("LayerNorm"),
-        )?; //  nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        )?;
 
-        let dropout = Dropout::new(config.hidden_dropout_prob); // nn.Dropout(config.hidden_dropout_prob)
+        // nn.Dropout(config.hidden_dropout_prob)
+        let dropout = Dropout::new(config.hidden_dropout_prob); 
         Ok(Self {
             dense,
             layer_norm,
@@ -684,15 +749,18 @@ impl RobertaSelfOutput {
     }
 
     fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
-        let hidden_states = self.dense.forward(hidden_states)?; // self.dense(hidden_states)
-        let hidden_states = self.dropout.forward(&hidden_states)?; // self.dropout(hidden_states)
-        self.layer_norm.forward(&(hidden_states + input_tensor)?) // self.LayerNorm(hidden_states + input_tensor)
+        // self.dense(hidden_states)
+        let hidden_states = self.dense.forward(hidden_states)?;
+        // self.dropout(hidden_states)
+        let hidden_states = self.dropout.forward(&hidden_states)?;
+        // self.LayerNorm(hidden_states + input_tensor)
+        self.layer_norm.forward(&(hidden_states + input_tensor)?) 
     }
 }
 ```
 
 ### f. RobertaAttention:
-[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L305)
+[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L305). The Roberta Attention Layer is made up of the Self Attention Layer and the Self Output Layer implemented earlier. The output of the Self Attention Layer is passed through the Self Output Layer.
 
 ```rust
 struct RobertaAttention {
@@ -702,8 +770,10 @@ struct RobertaAttention {
 
 impl RobertaAttention {
     fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
-        let self_attention = RobertaSelfAttention::load(vb.pp("self"), config)?; // RobertaSelfAttention(config, position_embedding_type=position_embedding_type)
-        let self_output = RobertaSelfOutput::load(vb.pp("output"), config)?; // RobertaSelfOutput(config)
+        // RobertaSelfAttention(config, position_embedding_type=position_embedding_type)
+        let self_attention = RobertaSelfAttention::load(vb.pp("self"), config)?;
+        // RobertaSelfOutput(config) 
+        let self_output = RobertaSelfOutput::load(vb.pp("output"), config)?; 
 
         Ok(Self {
             self_attention,
@@ -712,8 +782,10 @@ impl RobertaAttention {
     }
 
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
-        let self_outputs = self.self_attention.forward(hidden_states)?; //self_outputs = self.self(hidden_states)
-        let attention_output = self.self_output.forward(&self_outputs, hidden_states)?; // attention_output = self.output(self_outputs[0], hidden_states)
+        //self_outputs = self.self(hidden_states)
+        let self_outputs = self.self_attention.forward(hidden_states)?; 
+        // attention_output = self.output(self_outputs[0], hidden_states)
+        let attention_output = self.self_output.forward(&self_outputs, hidden_states)?; 
 
         Ok(attention_output)
     }
@@ -721,7 +793,7 @@ impl RobertaAttention {
 ```
 
 ### g. RobertaIntermediate
-[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L355)
+[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L355). The intermediate layer is made up of a linear layer and an activation function. Here we use the GELU activation function. This layer combined with the Attention Layer and an Output layer makes up the Encoder.
 
 ```rust
 struct RobertaIntermediate {
@@ -731,7 +803,8 @@ struct RobertaIntermediate {
 
 impl RobertaIntermediate {
     fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
-        let dense = linear(config.hidden_size, config.intermediate_size, vb.pp("dense"))?; // nn.Linear(config.hidden_size, config.intermediate_size)
+        // nn.Linear(config.hidden_size, config.intermediate_size)
+        let dense = linear(config.hidden_size, config.intermediate_size, vb.pp("dense"))?; 
         Ok(Self {
             dense,
             intermediate_act: Activation::new(),
@@ -739,15 +812,17 @@ impl RobertaIntermediate {
     }
 
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
-        let hidden_states = self.dense.forward(hidden_states)?; // self.dense(hidden_states)
-        let ys = self.intermediate_act.forward(&hidden_states)?; // self.intermediate_act_fn(hidden_states)
+        // self.dense(hidden_states)
+        let hidden_states = self.dense.forward(hidden_states)?; 
+        // self.intermediate_act_fn(hidden_states)
+        let ys = self.intermediate_act.forward(&hidden_states)?; 
         Ok(ys)
     }
 }
 ```
 
 ### h. RobertaOutput
-[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L371)
+[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L371). The output layer is made up of a linear layer, layer norm and dropout layer. This layer combined with the Attention Layer and an Intermediate layer makes up the Encoder.
 
 ```rust
 struct RobertaOutput {
@@ -758,12 +833,14 @@ struct RobertaOutput {
 
 impl RobertaOutput {
     fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
-        let dense = linear(config.intermediate_size, config.hidden_size, vb.pp("dense"))?; //nn.Linear(config.intermediate_size, config.hidden_size)
+        // nn.Linear(config.intermediate_size, config.hidden_size)
+        let dense = linear(config.intermediate_size, config.hidden_size, vb.pp("dense"))?;
+        // nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         let layer_norm = layer_norm(
             config.hidden_size,
             config.layer_norm_eps,
             vb.pp("LayerNorm"),
-        )?; // nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        )?; 
         let dropout = Dropout::new(config.hidden_dropout_prob);
         Ok(Self {
             dense,
@@ -773,15 +850,18 @@ impl RobertaOutput {
     }
 
     fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
-        let hidden_states = self.dense.forward(hidden_states)?; // self.dense(hidden_states)
-        let hidden_states = self.dropout.forward(&hidden_states)?; // self.dropout(hidden_states)
-        self.layer_norm.forward(&(hidden_states + input_tensor)?) // self.LayerNorm(hidden_states + input_tensor)
+        // self.dense(hidden_states)
+        let hidden_states = self.dense.forward(hidden_states)?;
+        // self.dropout(hidden_states)
+        let hidden_states = self.dropout.forward(&hidden_states)?;
+        // self.LayerNorm(hidden_states + input_tensor)
+        self.layer_norm.forward(&(hidden_states + input_tensor)?) 
     }
 }
 ```
 
 ### i. RobertaLayer
-[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L386): This does not include an implementation of cross-attention
+[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L386): This does not include an implementation of cross-attention as in the Pytorch code. As mentioned in the previous layers, The Robertalayer is made up of an Attention Layer, an Intermediate Layer and an Output Layer. This layer combined with the Attention Layer and an Output layer makes up the Encoder.
 
 ```rust
 struct RobertaLayer {
@@ -792,9 +872,12 @@ struct RobertaLayer {
 
 impl RobertaLayer {
     fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
-        let attention = RobertaAttention::load(vb.pp("attention"), config)?; // RobertaAttention(config)
-        let intermediate = RobertaIntermediate::load(vb.pp("intermediate"), config)?; // RobertaIntermediate(config)
-        let output = RobertaOutput::load(vb.pp("output"), config)?; // RobertaOutput(config)
+        // RobertaAttention(config)
+        let attention = RobertaAttention::load(vb.pp("attention"), config)?;
+        // RobertaIntermediate(config)
+        let intermediate = RobertaIntermediate::load(vb.pp("intermediate"), config)?; 
+        // RobertaOutput(config)
+        let output = RobertaOutput::load(vb.pp("output"), config)?; 
         Ok(Self {
             attention,
             intermediate,
@@ -803,26 +886,30 @@ impl RobertaLayer {
     }
 
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
-        let attention_output = self.attention.forward(hidden_states)?; // self.attention(hidden_states)
+        // self.attention(hidden_states)
+        let attention_output = self.attention.forward(hidden_states)?; 
 
-        let intermediate_output = self.intermediate.forward(&attention_output)?; //  self.intermediate(attention_output)
+        //  self.intermediate(attention_output)
+        let intermediate_output = self.intermediate.forward(&attention_output)?; 
+        // self.output(intermediate_output, attention_output)
         let layer_output = self
             .output
-            .forward(&intermediate_output, &attention_output)?; // self.output(intermediate_output, attention_output)
+            .forward(&intermediate_output, &attention_output)?; 
         Ok(layer_output)
     }
 }
 ```
 
 ### j. RobertaEncoder
-[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L473)
+[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L473). The Encoder is made up of a stack of RobertaLayers. The output of the Encoder is the output of the last RobertaLayer.
 
 ```rust
 impl RobertaEncoder {
     fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+        // nn.ModuleList([RobertaLayer(config) for _ in range(config.num_hidden_layers)])
         let layers = (0..config.num_hidden_layers)
             .map(|index| RobertaLayer::load(vb.pp(&format!("layer.{index}")), config))
-            .collect::<Result<Vec<_>>>()?; // nn.ModuleList([RobertaLayer(config) for _ in range(config.num_hidden_layers)])
+            .collect::<Result<Vec<_>>>()?; 
         Ok(RobertaEncoder { layers })
     }
 
@@ -841,7 +928,7 @@ impl RobertaEncoder {
 ```
 
 ### k. RobertaModel
-[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L691)
+[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L691). VOila! We have implemented all the components of the Roberta Model. The Roberta Model is made up of an Embedding Layer and an Encoder. The output of the Roberta Model is the output of the Encoder.
 
 ```rust
 pub struct RobertaModel {
@@ -880,8 +967,10 @@ impl RobertaModel {
     }
 
     pub fn forward(&self, input_ids: &Tensor, token_type_ids: &Tensor) -> Result<Tensor> {
-        let embedding_output = self.embeddings.forward(input_ids, token_type_ids, None, None)?; // self.embedding(input_ids=input_ids,)
-        let sequence_output = self.encoder.forward(&embedding_output)?; //self.encoder(embedding_output,)
+        // self.embedding(input_ids=input_ids)
+        let embedding_output = self.embeddings.forward(input_ids, token_type_ids, None, None)?;
+         // self.encoder(embedding_output )
+        let sequence_output = self.encoder.forward(&embedding_output)?;
         Ok(sequence_output)
     }
 
@@ -889,4 +978,63 @@ impl RobertaModel {
 ```
 
 
-### Unit Tests for Different Components
+### Debugging the Model
+
+#### Unit Tests for Different Components
+It is important to write unit tests for the different components of the model. This is to ensure that the model is working as expected. Unit tests sometime appear to be time-consuming but they can be very important in the long run. Here are some unit tests I wrote during the porting process:
+
+```rust
+// Regression_test = https://github.com/huggingface/transformers/blob/21dc5859421cf0d7d82d374b10f533611745a8c5/tests/models/xlm_roberta_xl/test_modeling_xlm_roberta_xl.py#L496
+#[test]
+fn test_create_position_ids_from_input_embeds() -> Result<()> {
+
+    let config = RobertaConfig::default();
+    let vb = VarBuilder::zeros(DType::F32, &Device::Cpu);
+    let embeddings_module = RobertaEmbeddings::load(vb, &config).unwrap();
+
+    let input_embeds = Tensor::randn(0f32, 1f32, (2, 4, 30), &Device::Cpu).unwrap();
+    let position_ids = embeddings_module.create_position_ids_from_input_embeds(&input_embeds);
+
+    let expected_tensor: &[[u32; 4]; 2] = &[
+        [0 + embeddings_module.padding_idx + 1, 1 + embeddings_module.padding_idx + 1, 2 + embeddings_module.padding_idx + 1, 3 + embeddings_module.padding_idx + 1,],
+        [0 + embeddings_module.padding_idx + 1, 1 + embeddings_module.padding_idx + 1, 2 + embeddings_module.padding_idx + 1, 3 + embeddings_module.padding_idx + 1,]
+    ];
+
+    assert_eq!(position_ids.unwrap().to_vec2::<u32>()?, expected_tensor);
+
+    Ok(())
+
+}
+```
+
+- Testing the Model :: [Full Test Code](tests/test_roberta.rs)
+    ```rust
+    // https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/tests/models/roberta/test_modeling_roberta.py#L548
+    #[test]
+    fn test_modeling_roberta_base () -> Result<()> {
+        // model = RobertaModel.from_pretrained("roberta-base")
+        let (model, _) =  build_roberta_model_and_tokenizer("roberta-base", false).unwrap();
+
+        // input_ids = torch.tensor([[0, 31414, 232, 328, 740, 1140, 12695, 69, 46078, 1588, 2]])
+        let input_ids = &[[0u32, 31414, 232, 328, 740, 1140, 12695, 69, 46078, 1588, 2]];
+        let input_ids = Tensor::new(input_ids, &model.device).unwrap();
+
+        let token_ids = input_ids.zeros_like().unwrap();
+        let output = model.forward(&input_ids, &token_ids)?;
+
+        let expected_shape = [1, 11, 768];
+        assert_eq!(output.shape().dims(), &expected_shape);
+
+        // expected_slice = torch.tensor([[[-0.0231, 0.0782, 0.0074], [-0.1854, 0.0540, -0.0175], [0.0548, 0.0799, 0.1687]]])
+        let expected_output = [[-0.0231, 0.0782, 0.0074], [-0.1854, 0.0540, -0.0175], [0.0548, 0.0799, 0.1687]];
+
+        // self.assertTrue(torch.allclose(output[:, :3, :3], expected_slice, atol=1e-4))
+        let output = output.squeeze(0)?;
+        let output = output.to_vec2::<f32>()?;
+        let output: Vec<Vec<f32>> = output.iter().take(3).map(|nested_vec| nested_vec.iter().take(3).map(|&x| round_to_decimal_places(x, 4)).collect()).collect();
+        assert_eq!(output, expected_output);
+
+        Ok(())
+
+    }
+    ```
