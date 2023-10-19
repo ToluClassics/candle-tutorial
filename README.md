@@ -13,7 +13,7 @@ Tutorial Structure:
 - [Parallels between Pytorch and Candle](#3-parallels-between-pytorch-and-candle)
     - [Tensors](#tensors)
     - [Tensor Operations](#tensor-operations)
-- [Translating a PyTorch Transformer Model into Candle](#translating-a-pytorch-transformer-model-into-candle)
+- [Translating a PyTorch Transformer Model into Candle](#3-translating-a-pytorch-transformer-model-into-candle)
     - [RoBERTa](#31-roberta)
         - [a. Writing Building Blocks](#a-writing-building-blocks)
         - [b. Roberta Config](#b-roberta-config)
@@ -33,11 +33,11 @@ Tutorial Structure:
 
 - When Porting an already trained checkpoint to Candle, there's a bunch of PyTorch code that are not relevant and they are mostly included for handling different scenarios in training. It's definitely beneficial to know which functions to bypass if the conversion effort is mostly geared towards loading an already trained model.
 
-- Python Built in Method: Unlike Python where we have built-in methods like `__call__` that allow us to use a class as a method and `__init__` for initializing a class, In rust we have to explicitly define methods like `Class::new()` to initialize a class and `Class::forward()` to perform a forward pass. This is going to be a recurrent theme in most of the classes below.
+- Python Built in Method: Unlike Python where we have built-in methods like `__call__` that allow us to use a class as a method and `__init__` for initializing a class, In rust we have to explicitly define methods like `Class::new()` to initialize a class and `Class::forward()` to perform a forward pass. This is going to be a recurrent theme in most of the code shown below.
 
-- It is important to write [unit tests](tests/test_roberta.rs) after writing most or every module to ensure that input and output shapes in Candle are consistent with the same module in pytorch
+- It is important to write [unit tests](tests/test_roberta.rs) after writing most or every module to ensure that input and output shapes in Candle are consistent with the same module in pytorch.
 
-- In PyTorch, we can initialize module weights by creating a class method `_init_weights` but in candle it becomes a design decision, you can initialize a tensor using the shape of your weights/bias (e.g. ) and hold it in a `VarBuilder`
+- In PyTorch, we can initialize module weights by creating a class method `_init_weights` but in candle it becomes a design decision, you can initialize a tensor using the shape of your weights/bias (e.g. ) and hold it in a `VarBuilder` which then used to initialize the tensors in each module.
 
 
 ### 1. Start a new rust project
