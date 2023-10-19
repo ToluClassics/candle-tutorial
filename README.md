@@ -10,7 +10,7 @@ Tutorial Structure:
     - [1. Start a new rust project](#1-start-a-new-rust-project)
     - [2. Install Candle & Other Packages](#2-install-candle--other-packages)
 
-- [Parallels between Pytorch and Candle](#parallels-between-pytorch-and-candle)
+- [Parallels between Pytorch and Candle](#3-parallels-between-pytorch-and-candle)
     - [Tensors](#tensors)
     - [Tensor Operations](#tensor-operations)
 - [Translating a PyTorch Transformer Model into Candle](#translating-a-pytorch-transformer-model-into-candle)
@@ -25,7 +25,7 @@ Tutorial Structure:
         - [h. RobertaLayer](#h-robertalayer)
         - [i. RobertaEncoder](#i-robertaencoder)
         - [j. RobertaModel](#j-robertamodel)
-- 
+- [Debugging/Testing the model](#debugging-the-model)
 
 ## Getting Started:
 
