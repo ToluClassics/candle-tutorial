@@ -506,9 +506,7 @@ impl RobertaLayer {
 
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
         let attention_output = self.attention.forward(hidden_states)?;
-        // TODO: Support cross-attention?
-        // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L523
-        // TODO: Support something similar to `apply_chunking_to_forward`?
+
         let intermediate_output = self.intermediate.forward(&attention_output)?;
         let layer_output = self
             .output

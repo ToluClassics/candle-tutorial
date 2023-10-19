@@ -6,6 +6,17 @@ This repo provides some guide for converting pytorch models from the transformer
 
 ## Getting Started:
 
+### 0. Important things to note
+
+- When Porting an already trained checkpoint to Candle, there's a bunch of PyTorch code that are not relevant and they are mostly included for handling different scenarios in training. It's definitely beneficial to know which functions to bypass if the code is mostly geared towards loading an already trained model.
+
+- Python Built in Method: Unlike Python where we have built-in methods like `__call__` that allow us to use a class as a method and `__init__` for initializing a class, In rust we have to explicitly define methods like `Class::new()` to initialize a class and `CLass::forward` to perform a forward pass. This is going to be a recurrent theme in most of the classes below.
+
+- It is important to write [unit tests](tests/test_roberta.rs) after writing most or every module to ensure that input and output shapes in Candle are consistent with the same module in pytorch
+
+- In PyTorch, we can initialize module weights by creating a class method `_init_weights` but in candle it becomes a design decision, you can initialize a tensor using the shape of your weights/bias (e.g. ) and hold it in a `VarBuilder`
+
+
 ### 1. Start a new rust project
 The command below will create a new rust project called `candle-roberta` in the current directory with a `Cargo.toml` file and a `src` directory with a `main.rs` file in it.
 
@@ -703,7 +714,7 @@ impl RobertaAttention {
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
         let self_outputs = self.self_attention.forward(hidden_states)?; //self_outputs = self.self(hidden_states)
         let attention_output = self.self_output.forward(&self_outputs, hidden_states)?; // attention_output = self.output(self_outputs[0], hidden_states)
-        
+
         Ok(attention_output)
     }
 }
@@ -712,25 +723,170 @@ impl RobertaAttention {
 ### g. RobertaIntermediate
 [HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L355)
 
-...
+```rust
+struct RobertaIntermediate {
+    dense: Linear,
+    intermediate_act: HiddenActLayer,
+}
+
+impl RobertaIntermediate {
+    fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+        let dense = linear(config.hidden_size, config.intermediate_size, vb.pp("dense"))?; // nn.Linear(config.hidden_size, config.intermediate_size)
+        Ok(Self {
+            dense,
+            intermediate_act: Activation::new(),
+        })
+    }
+
+    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+        let hidden_states = self.dense.forward(hidden_states)?; // self.dense(hidden_states)
+        let ys = self.intermediate_act.forward(&hidden_states)?; // self.intermediate_act_fn(hidden_states)
+        Ok(ys)
+    }
+}
+```
 
 ### h. RobertaOutput
 [HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L371)
 
-...
+```rust
+struct RobertaOutput {
+    dense: Linear,
+    layer_norm: LayerNorm,
+    dropout: Dropout,
+}
+
+impl RobertaOutput {
+    fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+        let dense = linear(config.intermediate_size, config.hidden_size, vb.pp("dense"))?; //nn.Linear(config.intermediate_size, config.hidden_size)
+        let layer_norm = layer_norm(
+            config.hidden_size,
+            config.layer_norm_eps,
+            vb.pp("LayerNorm"),
+        )?; // nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        let dropout = Dropout::new(config.hidden_dropout_prob);
+        Ok(Self {
+            dense,
+            layer_norm,
+            dropout,
+        })
+    }
+
+    fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
+        let hidden_states = self.dense.forward(hidden_states)?; // self.dense(hidden_states)
+        let hidden_states = self.dropout.forward(&hidden_states)?; // self.dropout(hidden_states)
+        self.layer_norm.forward(&(hidden_states + input_tensor)?) // self.LayerNorm(hidden_states + input_tensor)
+    }
+}
+```
 
 ### i. RobertaLayer
-[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L386)
+[HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L386): This does not include an implementation of cross-attention
 
-...
+```rust
+struct RobertaLayer {
+    attention: RobertaAttention,
+    intermediate: RobertaIntermediate,
+    output: RobertaOutput,
+}
+
+impl RobertaLayer {
+    fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+        let attention = RobertaAttention::load(vb.pp("attention"), config)?; // RobertaAttention(config)
+        let intermediate = RobertaIntermediate::load(vb.pp("intermediate"), config)?; // RobertaIntermediate(config)
+        let output = RobertaOutput::load(vb.pp("output"), config)?; // RobertaOutput(config)
+        Ok(Self {
+            attention,
+            intermediate,
+            output,
+        })
+    }
+
+    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+        let attention_output = self.attention.forward(hidden_states)?; // self.attention(hidden_states)
+
+        let intermediate_output = self.intermediate.forward(&attention_output)?; //  self.intermediate(attention_output)
+        let layer_output = self
+            .output
+            .forward(&intermediate_output, &attention_output)?; // self.output(intermediate_output, attention_output)
+        Ok(layer_output)
+    }
+}
+```
 
 ### j. RobertaEncoder
 [HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L473)
 
-...
+```rust
+impl RobertaEncoder {
+    fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+        let layers = (0..config.num_hidden_layers)
+            .map(|index| RobertaLayer::load(vb.pp(&format!("layer.{index}")), config))
+            .collect::<Result<Vec<_>>>()?; // nn.ModuleList([RobertaLayer(config) for _ in range(config.num_hidden_layers)])
+        Ok(RobertaEncoder { layers })
+    }
+
+    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+        let mut hidden_states = hidden_states.clone();
+
+        //for i, layer_module in enumerate(self.layer):
+        //  layer_outputs = layer_module(hidden_states)
+
+        for layer in self.layers.iter() {
+            hidden_states = layer.forward(&hidden_states)?
+        }
+        Ok(hidden_states)
+    }
+}
+```
 
 ### k. RobertaModel
 [HuggingFace PyTorch Implementation](https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/src/transformers/models/roberta/modeling_roberta.py#L691)
 
-...
+```rust
+pub struct RobertaModel {
+    embeddings: RobertaEmbeddings,
+    encoder: RobertaEncoder,
+    pub device: Device,
+}
 
+impl RobertaModel {
+    pub fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+        let (embeddings, encoder) = match (
+            RobertaEmbeddings::load(vb.pp("embeddings"), config), // RobertaEmbeddings(config)
+            RobertaEncoder::load(vb.pp("encoder"), config), // RobertaEncoder(config)
+        ) {
+            (Ok(embeddings), Ok(encoder)) => (embeddings, encoder),
+            (Err(err), _) | (_, Err(err)) => {
+                if let Some(model_type) = &config.model_type {
+                    if let (Ok(embeddings), Ok(encoder)) = (
+                        RobertaEmbeddings::load(vb.pp(&format!("{model_type}.embeddings")), config),
+                        RobertaEncoder::load(vb.pp(&format!("{model_type}.encoder")), config),
+                    ) {
+                        (embeddings, encoder)
+                    } else {
+                        return Err(err);
+                    }
+                } else {
+                    return Err(err);
+                }
+            }
+        };
+        Ok(Self {
+            embeddings,
+            encoder,
+            device: vb.device().clone(),
+        })
+    }
+
+    pub fn forward(&self, input_ids: &Tensor, token_type_ids: &Tensor) -> Result<Tensor> {
+        let embedding_output = self.embeddings.forward(input_ids, token_type_ids, None, None)?; // self.embedding(input_ids=input_ids,)
+        let sequence_output = self.encoder.forward(&embedding_output)?; //self.encoder(embedding_output,)
+        Ok(sequence_output)
+    }
+
+}
+```
+
+
+### Unit Tests for Different Components
