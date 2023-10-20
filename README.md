@@ -262,7 +262,7 @@ Import the necessary modules from candle and other crates:
 
 ### a. Writing Building Blocks:
 
-- Linear/Embeddin: This is a helper function for loading the weights of a linear/embedding layer using `VarBuilder` from a checkpoint file. We create these 2 helper functions because we will use them multiple times:
+- Linear/Embedding: This is a helper function for loading the weights of a linear/embedding layer using `VarBuilder` from a checkpoint file. We create these 2 helper functions because we will use them multiple times.:
 
     ```rust
     fn embedding(vocab_size: usize, hidden_size: usize, vb: VarBuilder) -> Result<Embedding> {
@@ -276,6 +276,8 @@ Import the necessary modules from candle and other crates:
         Ok(Linear::new(weight, Some(bias)))
     }
     ```
+
+    Both of these functions already exist in `candle_nn` and can be imported as such `candle_nn::{embedding,linear}`
 
 - Layer Norm (https://pytorch.org/docs/stable/generated/torch.nn.LayerNorm.html): Used to a normalize a tensor over a given axis. It is used in the embedding layer and the encoder layer. A good explanation of layer normalization can be [found here](https://www.pinecone.io/learn/batch-layer-normalization/#What-is-Layer-Normalization). This is required because we need to implement the low-level layer norm module in Candle.
 
@@ -291,7 +293,7 @@ Import the necessary modules from candle and other crates:
         LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         ```
 
-    - Candle: In candle we can implement the layer normalization using the equation above. Steps:
+    - Candle: In candle we can implement the layer normalization using the equation above or import it directly from `candle_nn` with `candle_nn::{LayerNorm,layer_norm}` Steps:
         - Since normalization is done over the last axis which is the hidden size, we can use the `sum_keepdim` method to sum over the last axis and divide by dimension size to get `mean_x`.
         - For each element in the tensor, we subtract the mean and square the result and divide by hidden dimension to get `norm_x`.
         - To get the normalized input, we subtract the mean from the input and divide by the square root of `norm_x + eps`.
