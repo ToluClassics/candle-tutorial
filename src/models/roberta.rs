@@ -1,15 +1,35 @@
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Embedding, Module, VarBuilder};
+
+use crate::models::modelling_outputs::SequenceClassifierOutput;
 use serde::Deserialize;
 
 pub const FLOATING_DTYPE: DType = DType::F32;
 pub const LONG_DTYPE: DType = DType::I64;
+
+pub fn sigmoid(xs: &Tensor) -> Result<Tensor> {
+    // TODO: Should we have a specialized op for this?
+    (xs.neg()?.exp()? + 1.0)?.recip()
+}
+
+pub fn binary_cross_entropy_with_logit(inp: &Tensor, target: &Tensor) -> Result<Tensor> {
+    let inp = sigmoid(inp)?;
+
+    let left_side = target * inp.log()?;
+    let right_side = (target.affine(-1., 1.))? * inp.affine(-1., 1.)?.log()?;
+
+    let loss = left_side? + right_side?;
+    let loss = loss?.neg()?.mean_all()?;
+
+    Ok(loss)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum HiddenAct {
     Gelu,
     Relu,
+    Tanh
 }
 
 struct HiddenActLayer {
@@ -26,6 +46,7 @@ impl HiddenActLayer {
             // https://github.com/huggingface/transformers/blob/cd4584e3c809bb9e1392ccd3fe38b40daba5519a/src/transformers/activations.py#L213
             HiddenAct::Gelu => xs.gelu_erf(),
             HiddenAct::Relu => xs.relu(),
+            HiddenAct::Tanh => xs.tanh()
         }
     }
 }
@@ -129,6 +150,8 @@ pub struct RobertaConfig {
     use_cache: bool,
     classifier_dropout: Option<f64>,
     model_type: Option<String>,
+    problem_type: Option<String>,
+    _num_labels: Option<usize>
 }
 
 impl Default for RobertaConfig {
@@ -152,6 +175,8 @@ impl Default for RobertaConfig {
             use_cache: true,
             classifier_dropout: None,
             model_type: Some("roberta".to_string()),
+            problem_type: None,
+            _num_labels: Some(3)
         }
     }
 }
@@ -544,6 +569,33 @@ impl RobertaEncoder {
     }
 }
 
+pub struct RobertaPooler{
+    dense: Linear,
+    activation: HiddenActLayer,
+}
+
+impl RobertaPooler{
+    pub fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+        let dense = linear(config.hidden_size, config.hidden_size, vb.pp("dense"))?;
+        Ok( Self {
+            dense,
+            activation: HiddenActLayer::new(HiddenAct::Tanh),
+        })
+
+    }
+
+    pub fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+        // We "pool" the model by simply taking the hidden state corresponding
+        // to the first token.
+
+        let first_token_sensor = hidden_states.i((.., 0))?;
+        let pooled_output = self.dense.forward(&first_token_sensor)?;
+        let pooled_output = self.activation.forward(&pooled_output)?;
+        
+        Ok(pooled_output)
+    }
+}
+
 pub struct RobertaModel {
     embeddings: RobertaEmbeddings,
     encoder: RobertaEncoder,
@@ -588,10 +640,184 @@ impl RobertaModel {
     }
 }
 
+pub struct RobertaModelWithPooler {
+    embeddings: RobertaEmbeddings,
+    encoder: RobertaEncoder,
+    pooler: RobertaPooler, 
+    pub device: Device,
+}
+
+impl RobertaModelWithPooler {
+    pub fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+        let (embeddings, encoder, pooler) = match (
+            RobertaEmbeddings::load(vb.pp("embeddings"), config),
+            RobertaEncoder::load(vb.pp("encoder"), config),
+            RobertaPooler::load(vb.pp("pooler"), config)
+        ) {
+            (Ok(embeddings), Ok(encoder), Ok(pooler)) => (embeddings, encoder, pooler),
+            (Err(err), _, _) | (_, Err(err), _) | (_, _, Err(err)) => {
+                if let Some(model_type) = &config.model_type {
+                    if let (Ok(embeddings), Ok(encoder), Ok(pooler)) = (
+                        RobertaEmbeddings::load(vb.pp(&format!("{model_type}.embeddings")), config),
+                        RobertaEncoder::load(vb.pp(&format!("{model_type}.encoder")), config),
+                        RobertaPooler::load(vb.pp(&format!("{model_type}.pooler")), config),
+                    ) {
+                        (embeddings, encoder, pooler)
+                    } else {
+                        return Err(err);
+                    }
+                } else {
+                    return Err(err);
+                }
+            }
+        };
+        Ok(Self {
+            embeddings,
+            encoder,
+            pooler,
+            device: vb.device().clone(),
+        })
+    }
+
+    pub fn forward(&self, input_ids: &Tensor, token_type_ids: &Tensor) -> Result<Tensor> {
+        let embedding_output = self
+            .embeddings
+            .forward(input_ids, token_type_ids, None, None)?;
+        let sequence_output = self.encoder.forward(&embedding_output)?;
+        let pooled_output = self.pooler.forward(&sequence_output)?;
+        Ok(pooled_output)
+    }
+}
+
+struct RobertaClassificationHead{
+    dense: Linear,
+    dropout: Dropout,
+    out_proj: Linear
+}
+
+impl RobertaClassificationHead {
+
+    fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+        let dense = linear(config.hidden_size, config.hidden_size, vb.pp("dense"))?;
+        let classifier_dropout = config.classifier_dropout;
+
+        let classifier_dropout: f64 = match classifier_dropout {
+            Some(classifier_dropout) => classifier_dropout,
+            None => config.hidden_dropout_prob, 
+        };
+        let out_proj = linear(config.hidden_size, config._num_labels.unwrap(), vb.pp("out_proj"))?;
+
+        Ok( Self {
+            dense,
+            dropout: Dropout::new(classifier_dropout),
+            out_proj
+        })
+
+    }
+
+    fn forward(&self, features: &Tensor) -> Result<Tensor> {
+
+        let x = features.i((.., 0))?;
+        let x = self.dropout.forward(&x)?;
+        let x = self.dense.forward(&x)?;
+        let x = x.tanh()?;
+        let x = self.dropout.forward(&x)?;
+        let x = self.out_proj.forward(&x)?;
+
+        println!("x: {:?}", x.shape());
+
+        Ok(x)
+
+    }
+}
+
+pub struct RobertaForSequenceClassification {
+    roberta: RobertaModel,
+    classifier: RobertaClassificationHead,
+    pub device: Device,
+    config: RobertaConfig
+}
+
+impl  RobertaForSequenceClassification {
+    pub fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+        let (roberta, classifier) = match (
+            RobertaModel::load(vb.pp("roberta"), config),
+            RobertaClassificationHead::load(vb.pp("classifier"), config),
+        ) {
+            (Ok(roberta), Ok(classifier)) => (roberta, classifier),
+            (Err(err), _) | (_, Err(err)) => {
+                return Err(err);
+            }
+        };
+        Ok(Self {
+            roberta,
+            classifier,
+            device: vb.device().clone(),
+            config: config.clone()
+        })
+    }
+
+    pub fn forward(&self, input_ids: &Tensor, token_type_ids: &Tensor, labels: Option<&Tensor>) -> Result<SequenceClassifierOutput> {
+        let outputs = self
+            .roberta
+            .forward(input_ids, token_type_ids)?;
+        let mut problem_type: String = String::from("");
+
+        let logits = self.classifier.forward(&outputs)?;
+        let mut loss: Tensor = Tensor::new(vec![0.0], &self.device)?;
+
+        match labels {
+            Some(labels) => {
+                let labels = labels.to_device(&input_ids.device())?;
+
+                if self.config.problem_type == None {
+                    if self.config._num_labels == Some(1) {
+                        problem_type = String::from("regression");
+                    } else if self.config._num_labels > Some(1) && (labels.dtype() == LONG_DTYPE || labels.dtype() == DType::U32) {
+                        problem_type = String::from("single_label_classification");
+                    } else {
+                        problem_type = String::from("multi_label_classification");
+                    }
+                }
+
+                if problem_type == String::from("single_label_classification") {
+                    loss = candle_nn::loss::cross_entropy(&logits.flatten_to(1)?, &labels.flatten_to(1)?)?;
+                } else if problem_type == String::from("multi_label_classification") {
+                    let labels_logits: Tensor =  logits.zeros_like()?;
+                    let mut label_logits = labels_logits.to_vec2::<f32>()?;
+
+                    let label = vec![0, 1, 2, 3, 2];
+
+                    for vec_i in 0..label_logits.len() {
+                            label_logits[vec_i][label[vec_i]] = 1.0;
+                    }
+
+                    let label_logits = Tensor::new(label_logits, &self.device)?;
+
+                    loss = binary_cross_entropy_with_logit(&logits, &label_logits)?;
+                }
+
+            }
+
+            None => {}
+        }
+
+        Ok(SequenceClassifierOutput {
+            loss :Some(loss),
+            logits,
+            hidden_states :None,
+            attentions : None
+        })
+
+
+    }
+
+}
+
+
 struct RobertaForMultipleChoice {}
 
 struct RobertaForQuestionAnswering {}
 
 struct RobertaForTokenClassification {}
 
-struct RobertaForSequenceClassification {}
