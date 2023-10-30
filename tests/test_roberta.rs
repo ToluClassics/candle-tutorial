@@ -1,17 +1,23 @@
 mod tests {
     use candle_tutorial::models::roberta::{RobertaEmbeddings,RobertaModel, RobertaConfig,FLOATING_DTYPE, create_position_ids_from_input_ids};
+    use candle_tutorial::models::roberta::RobertaForSequenceClassification; 
     use anyhow::{anyhow, Error as E, Result};
     use hf_hub::{api::sync::Api, Cache, Repo, RepoType};
     use tokenizers::Tokenizer;
     use candle_nn::VarBuilder;
     use candle_core::{DType, Device, Tensor};
 
+    enum RobertaModelType {
+        RobertaModel {model: RobertaModel},
+        RobertaForSequenceClassification {model: RobertaForSequenceClassification}
+    }
+
     fn round_to_decimal_places(n: f32, places: u32) -> f32 {
         let multiplier: f32 = 10f32.powi(places as i32);
         (n * multiplier).round() / multiplier
     }
 
-    fn build_roberta_model_and_tokenizer(model_name_or_path: impl Into<String>, offline: bool) -> Result<(RobertaModel, Tokenizer)> {
+    fn build_roberta_model_and_tokenizer(model_name_or_path: impl Into<String>, offline: bool, model_type: &str) -> Result<(RobertaModelType, Tokenizer)> {
         let device = Device::Cpu;
         let (model_id, revision) = (model_name_or_path.into(), "main".to_string());
         let repo = Repo::with_revision(model_id, RepoType::Model, revision);
@@ -47,7 +53,19 @@ mod tests {
 
         let vb =
             unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], FLOATING_DTYPE, &device)? };
-        let model = RobertaModel::load(vb, &config)?;
+
+        let model = match model_type {
+            "RobertaModel" => {
+                let model = RobertaModel::load(vb, &config)?;
+                RobertaModelType::RobertaModel {model}
+            }
+            "RobertaForSequenceClassification" => {
+                let model = RobertaForSequenceClassification::load(vb, &config)?;
+                RobertaModelType::RobertaForSequenceClassification {model}
+            }
+            _ => panic!("Invalid model_type")
+        };
+
         Ok((model, tokenizer))
     }
 
@@ -100,8 +118,13 @@ mod tests {
     // https://github.com/huggingface/transformers/blob/e1cec43415e72c9853288d4e9325b734d36dd617/tests/models/roberta/test_modeling_roberta.py#L548
     #[test]
     fn test_modeling_roberta_base () -> Result<()> {
+        let model_type = "RobertaModel";
+        let (model, _tokenizer) =  build_roberta_model_and_tokenizer("roberta-base", false, model_type).unwrap();
 
-        let (model, _tokenizer) =  build_roberta_model_and_tokenizer("roberta-base", false).unwrap();
+        let model: RobertaModel = match model {
+            RobertaModelType::RobertaModel {model} => model,
+            _ => panic!("Invalid model_type")
+        };
 
         let input_ids = &[[0u32, 31414, 232, 328, 740, 1140, 12695, 69, 46078, 1588, 2]];
         let input_ids = Tensor::new(input_ids, &model.device).unwrap();
@@ -124,4 +147,40 @@ mod tests {
         Ok(())
 
     }
+
+
+    // https://github.com/huggingface/transformers/blob/46092f763d26eb938a937c2a9cc69ce1cb6c44c2/tests/models/roberta/test_modeling_roberta.py#L567
+    #[test]
+    fn test_inference_classification_head() -> Result<()> {
+
+        let model_type = "RobertaForSequenceClassification";
+        let (model, _tokenizer) =  build_roberta_model_and_tokenizer("roberta-large-mnli", false, model_type).unwrap();
+
+        let model: RobertaForSequenceClassification = match model {
+            RobertaModelType::RobertaForSequenceClassification {model} => model,
+            _ => panic!("Invalid model_type")
+        };
+
+        let input_ids = &[[0u32, 31414, 232, 328, 740, 1140, 12695, 69, 46078, 1588, 2]];
+        let input_ids = Tensor::new(input_ids, &model.device).unwrap();
+
+        let token_ids = input_ids.zeros_like().unwrap();
+        let output = model.forward(&input_ids, &token_ids, None)?;
+
+        let expected_shape = [1, 3];
+        let expected_output = [[-0.9469, 0.3913, 0.5118]];
+
+
+        assert_eq!(output.logits.shape().dims(), &expected_shape);
+
+        let output = output.logits.to_vec2::<f32>()?;
+        let output: Vec<Vec<f32>> = output.iter().take(3).map(|nested_vec| nested_vec.iter().take(3).map(|&x| round_to_decimal_places(x, 4)).collect()).collect();
+
+        assert_eq!(output, expected_output);
+
+        Ok(())
+
+    }
+
+
 }

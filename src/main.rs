@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Error as E, Result};
-use candle_core::{Device, Tensor};
+use candle_core::{Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use hf_hub::{api::sync::Api, Cache, Repo, RepoType};
 use tokenizers::Tokenizer;
@@ -66,9 +66,10 @@ fn main() -> Result<()> {
     println!("input_ids: {:?}", input_ids.to_vec2::<u32>()?);
 
     let output = model.forward(&input_ids, &token_ids)?;
-    let output = output.squeeze(0)?;
+    // let output = output.squeeze(0)?;
 
-    println!("output: {:?}", output.to_vec3::<f32>()?[0]);
+    println!("output: {:?}", output.i((.., 0))?.dims2());
+
 
     Ok(())
 }
