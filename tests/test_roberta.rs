@@ -1,73 +1,11 @@
 mod tests {
-    use candle_tutorial::models::roberta::{RobertaEmbeddings,RobertaModel, RobertaConfig,FLOATING_DTYPE, create_position_ids_from_input_ids};
-    use candle_tutorial::models::roberta::RobertaForSequenceClassification; 
-    use anyhow::{anyhow, Error as E, Result};
-    use hf_hub::{api::sync::Api, Cache, Repo, RepoType};
-    use tokenizers::Tokenizer;
+    use candle_tutorial::models::roberta::{RobertaEmbeddings,RobertaModel, RobertaConfig, create_position_ids_from_input_ids};
+    use candle_tutorial::models::roberta::{RobertaForSequenceClassification, RobertaForTokenClassification }; 
+    use candle_tutorial::utils::{build_roberta_model_and_tokenizer, ModelType, round_to_decimal_places};
+
+    use anyhow::Result;
     use candle_nn::VarBuilder;
     use candle_core::{DType, Device, Tensor};
-
-    enum RobertaModelType {
-        RobertaModel {model: RobertaModel},
-        RobertaForSequenceClassification {model: RobertaForSequenceClassification}
-    }
-
-    fn round_to_decimal_places(n: f32, places: u32) -> f32 {
-        let multiplier: f32 = 10f32.powi(places as i32);
-        (n * multiplier).round() / multiplier
-    }
-
-    fn build_roberta_model_and_tokenizer(model_name_or_path: impl Into<String>, offline: bool, model_type: &str) -> Result<(RobertaModelType, Tokenizer)> {
-        let device = Device::Cpu;
-        let (model_id, revision) = (model_name_or_path.into(), "main".to_string());
-        let repo = Repo::with_revision(model_id, RepoType::Model, revision);
-
-        let (config_filename, tokenizer_filename, weights_filename) = if offline {
-            let cache = Cache::default().repo(repo);
-            (
-                cache
-                    .get("config.json")
-                    .ok_or(anyhow!("Missing config file in cache"))?,
-                cache
-                    .get("tokenizer.json")
-                    .ok_or(anyhow!("Missing tokenizer file in cache"))?,
-                cache
-                    .get("model.safetensors")
-                    .ok_or(anyhow!("Missing weights file in cache"))?,
-            )
-        } else {
-            let api = Api::new()?;
-            let api = api.repo(repo);
-            (
-                api.get("config.json")?,
-                api.get("tokenizer.json")?,
-                api.get("model.safetensors")?,
-            )
-        };
-
-        println!("config_filename: {}", config_filename.display());
-
-        let config = std::fs::read_to_string(config_filename)?;
-        let config: RobertaConfig = serde_json::from_str(&config)?;
-        let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
-
-        let vb =
-            unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], FLOATING_DTYPE, &device)? };
-
-        let model = match model_type {
-            "RobertaModel" => {
-                let model = RobertaModel::load(vb, &config)?;
-                RobertaModelType::RobertaModel {model}
-            }
-            "RobertaForSequenceClassification" => {
-                let model = RobertaForSequenceClassification::load(vb, &config)?;
-                RobertaModelType::RobertaForSequenceClassification {model}
-            }
-            _ => panic!("Invalid model_type")
-        };
-
-        Ok((model, tokenizer))
-    }
 
     // Regression_test = https://github.com/huggingface/transformers/blob/21dc5859421cf0d7d82d374b10f533611745a8c5/tests/models/xlm_roberta_xl/test_modeling_xlm_roberta_xl.py#L496
     #[test]
@@ -122,7 +60,7 @@ mod tests {
         let (model, _tokenizer) =  build_roberta_model_and_tokenizer("roberta-base", false, model_type).unwrap();
 
         let model: RobertaModel = match model {
-            RobertaModelType::RobertaModel {model} => model,
+            ModelType::RobertaModel {model} => model,
             _ => panic!("Invalid model_type")
         };
 
@@ -151,13 +89,13 @@ mod tests {
 
     // https://github.com/huggingface/transformers/blob/46092f763d26eb938a937c2a9cc69ce1cb6c44c2/tests/models/roberta/test_modeling_roberta.py#L567
     #[test]
-    fn test_inference_classification_head() -> Result<()> {
+    fn test_roberta_sequence_classification() -> Result<()> {
 
         let model_type = "RobertaForSequenceClassification";
         let (model, _tokenizer) =  build_roberta_model_and_tokenizer("roberta-large-mnli", false, model_type).unwrap();
 
         let model: RobertaForSequenceClassification = match model {
-            RobertaModelType::RobertaForSequenceClassification {model} => model,
+            ModelType::RobertaForSequenceClassification {model} => model,
             _ => panic!("Invalid model_type")
         };
 
@@ -177,6 +115,56 @@ mod tests {
         let output: Vec<Vec<f32>> = output.iter().take(3).map(|nested_vec| nested_vec.iter().take(3).map(|&x| round_to_decimal_places(x, 4)).collect()).collect();
 
         assert_eq!(output, expected_output);
+
+        Ok(())
+
+    }
+
+    #[test]
+    fn test_roberta_token_classification() -> Result<()> {
+
+        let model_type = "RobertaForTokenClassification";
+        let (model, _tokenizer) =  build_roberta_model_and_tokenizer("Davlan/xlm-roberta-base-wikiann-ner", false, model_type).unwrap();
+
+        let model: RobertaForTokenClassification = match model {
+            ModelType::RobertaForTokenClassification {model} => model,
+            _ => panic!("Invalid model_type")
+        };
+
+        let input_ids = &[[0u32, 31414, 232, 328, 740, 1140, 12695, 69, 46078, 1588, 2]];
+        let input_ids = Tensor::new(input_ids, &model.device).unwrap();
+
+        let token_ids = input_ids.zeros_like().unwrap();
+        let output = model.forward(&input_ids, &token_ids, None)?;
+
+        println!("Output: {:?}",candle_nn::ops::softmax(&output.logits, candle_core::D::Minus1)?.to_vec3::<f32>()?);
+
+        println!("Output: {:?}", output.logits.to_vec3::<f32>()?);
+
+        Ok(())
+
+    }
+
+    #[test]
+    fn test_roberta_question_answering() -> Result<()> {
+
+        let model_type = "RobertaForTokenClassification";
+        let (model, _tokenizer) =  build_roberta_model_and_tokenizer("deepset/roberta-base-squad2", false, model_type).unwrap();
+
+        let model: RobertaForTokenClassification = match model {
+            ModelType::RobertaForTokenClassification {model} => model,
+            _ => panic!("Invalid model_type")
+        };
+
+        let input_ids = &[[0u32, 31414, 232, 328, 740, 1140, 12695, 69, 46078, 1588, 2]];
+        let input_ids = Tensor::new(input_ids, &model.device).unwrap();
+
+        let token_ids = input_ids.zeros_like().unwrap();
+        let output = model.forward(&input_ids, &token_ids, None)?;
+
+        println!("Output: {:?}",candle_nn::ops::softmax(&output.logits, candle_core::D::Minus1)?.to_vec3::<f32>()?);
+
+        println!("Output: {:?}", output.logits.to_vec3::<f32>()?);
 
         Ok(())
 

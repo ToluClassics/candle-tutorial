@@ -12,7 +12,7 @@ pub const FLOATING_DTYPE: DType = DType::F32;
 pub const LONG_DTYPE: DType = DType::I64;
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct RobertaConfig {
+pub struct XLMRobertaConfig {
     vocab_size: usize,
     hidden_size: usize,
     num_hidden_layers: usize,
@@ -39,7 +39,7 @@ pub struct RobertaConfig {
     label2id: Option<HashMap<String, usize>>
 }
 
-impl Default for RobertaConfig {
+impl Default for XLMRobertaConfig {
     fn default() -> Self {
         Self {
             vocab_size: 50265,
@@ -59,7 +59,7 @@ impl Default for RobertaConfig {
             position_embedding_type: PositionEmbeddingType::Absolute,
             use_cache: true,
             classifier_dropout: None,
-            model_type: Some("roberta".to_string()),
+            model_type: Some("xlm-roberta".to_string()),
             problem_type: None,
             _num_labels: Some(3),
             id2label: None,
@@ -140,7 +140,7 @@ fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<LayerNorm> {
     Ok(LayerNorm::new(weight, bias, eps))
 }
 
-pub struct RobertaEmbeddings {
+pub struct XLMRobertaEmbeddings {
     word_embeddings: Embedding,
     position_embeddings: Option<Embedding>,
     token_type_embeddings: Embedding,
@@ -149,8 +149,8 @@ pub struct RobertaEmbeddings {
     pub padding_idx: u32,
 }
 
-impl RobertaEmbeddings {
-    pub fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+impl XLMRobertaEmbeddings {
+    pub fn load(vb: VarBuilder, config: &XLMRobertaConfig) -> Result<Self> {
         let word_embeddings = embedding(
             config.vocab_size,
             config.hidden_size,
@@ -246,7 +246,7 @@ impl RobertaEmbeddings {
     }
 }
 
-struct RobertaSelfAttention {
+struct XLMRobertaSelfAttention {
     query: Linear,
     key: Linear,
     value: Linear,
@@ -255,8 +255,8 @@ struct RobertaSelfAttention {
     attention_head_size: usize,
 }
 
-impl RobertaSelfAttention {
-    fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+impl XLMRobertaSelfAttention {
+    fn load(vb: VarBuilder, config: &XLMRobertaConfig) -> Result<Self> {
         let attention_head_size = config.hidden_size / config.num_attention_heads;
         let all_head_size = config.num_attention_heads * attention_head_size;
         let dropout = Dropout::new(config.hidden_dropout_prob);
@@ -305,14 +305,14 @@ impl RobertaSelfAttention {
     }
 }
 
-struct RobertaSelfOutput {
+struct XLMRobertaSelfOutput {
     dense: Linear,
     layer_norm: LayerNorm,
     dropout: Dropout,
 }
 
-impl RobertaSelfOutput {
-    fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+impl XLMRobertaSelfOutput {
+    fn load(vb: VarBuilder, config: &XLMRobertaConfig) -> Result<Self> {
         let dense = linear(config.hidden_size, config.hidden_size, vb.pp("dense"))?;
         let layer_norm = layer_norm(
             config.hidden_size,
@@ -334,15 +334,15 @@ impl RobertaSelfOutput {
     }
 }
 
-struct RobertaAttention {
-    self_attention: RobertaSelfAttention,
-    self_output: RobertaSelfOutput,
+struct XLMRobertaAttention {
+    self_attention: XLMRobertaSelfAttention,
+    self_output: XLMRobertaSelfOutput,
 }
 
-impl RobertaAttention {
-    fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
-        let self_attention = RobertaSelfAttention::load(vb.pp("self"), config)?;
-        let self_output = RobertaSelfOutput::load(vb.pp("output"), config)?;
+impl XLMRobertaAttention {
+    fn load(vb: VarBuilder, config: &XLMRobertaConfig) -> Result<Self> {
+        let self_attention = XLMRobertaSelfAttention::load(vb.pp("self"), config)?;
+        let self_output = XLMRobertaSelfOutput::load(vb.pp("output"), config)?;
         Ok(Self {
             self_attention,
             self_output,
@@ -356,13 +356,13 @@ impl RobertaAttention {
     }
 }
 
-struct RobertaIntermediate {
+struct XLMRobertaIntermediate {
     dense: Linear,
     intermediate_act: HiddenActLayer,
 }
 
-impl RobertaIntermediate {
-    fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+impl XLMRobertaIntermediate {
+    fn load(vb: VarBuilder, config: &XLMRobertaConfig) -> Result<Self> {
         let dense = linear(config.hidden_size, config.intermediate_size, vb.pp("dense"))?;
         Ok(Self {
             dense,
@@ -377,14 +377,14 @@ impl RobertaIntermediate {
     }
 }
 
-struct RobertaOutput {
+struct XLMRobertaOutput {
     dense: Linear,
     layer_norm: LayerNorm,
     dropout: Dropout,
 }
 
-impl RobertaOutput {
-    fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+impl XLMRobertaOutput {
+    fn load(vb: VarBuilder, config: &XLMRobertaConfig) -> Result<Self> {
         let dense = linear(config.intermediate_size, config.hidden_size, vb.pp("dense"))?;
         let layer_norm = layer_norm(
             config.hidden_size,
@@ -406,17 +406,17 @@ impl RobertaOutput {
     }
 }
 
-struct RobertaLayer {
-    attention: RobertaAttention,
-    intermediate: RobertaIntermediate,
-    output: RobertaOutput,
+struct XLMRobertaLayer {
+    attention: XLMRobertaAttention,
+    intermediate: XLMRobertaIntermediate,
+    output: XLMRobertaOutput,
 }
 
-impl RobertaLayer {
-    fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
-        let attention = RobertaAttention::load(vb.pp("attention"), config)?;
-        let intermediate = RobertaIntermediate::load(vb.pp("intermediate"), config)?;
-        let output = RobertaOutput::load(vb.pp("output"), config)?;
+impl XLMRobertaLayer {
+    fn load(vb: VarBuilder, config: &XLMRobertaConfig) -> Result<Self> {
+        let attention = XLMRobertaAttention::load(vb.pp("attention"), config)?;
+        let intermediate = XLMRobertaIntermediate::load(vb.pp("intermediate"), config)?;
+        let output = XLMRobertaOutput::load(vb.pp("output"), config)?;
         Ok(Self {
             attention,
             intermediate,
@@ -435,16 +435,16 @@ impl RobertaLayer {
     }
 }
 
-struct RobertaEncoder {
-    layers: Vec<RobertaLayer>,
+struct XLMRobertaEncoder {
+    layers: Vec<XLMRobertaLayer>,
 }
 
-impl RobertaEncoder {
-    fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+impl XLMRobertaEncoder {
+    fn load(vb: VarBuilder, config: &XLMRobertaConfig) -> Result<Self> {
         let layers = (0..config.num_hidden_layers)
-            .map(|index| RobertaLayer::load(vb.pp(&format!("layer.{index}")), config))
+            .map(|index| XLMRobertaLayer::load(vb.pp(&format!("layer.{index}")), config))
             .collect::<Result<Vec<_>>>()?;
-        Ok(RobertaEncoder { layers })
+        Ok(XLMRobertaEncoder { layers })
     }
 
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
@@ -456,13 +456,13 @@ impl RobertaEncoder {
     }
 }
 
-pub struct RobertaPooler{
+pub struct XLMRobertaPooler{
     dense: Linear,
     activation: HiddenActLayer,
 }
 
-impl RobertaPooler{
-    pub fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+impl XLMRobertaPooler{
+    pub fn load(vb: VarBuilder, config: &XLMRobertaConfig) -> Result<Self> {
         let dense = linear(config.hidden_size, config.hidden_size, vb.pp("dense"))?;
         Ok( Self {
             dense,
@@ -483,24 +483,25 @@ impl RobertaPooler{
     }
 }
 
-pub struct RobertaModel {
-    embeddings: RobertaEmbeddings,
-    encoder: RobertaEncoder,
+pub struct XLMRobertaModel {
+    embeddings: XLMRobertaEmbeddings,
+    encoder: XLMRobertaEncoder,
     pub device: Device,
 }
 
-impl RobertaModel {
-    pub fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+impl XLMRobertaModel {
+    pub fn load(vb: VarBuilder, config: &XLMRobertaConfig) -> Result<Self> {
+        
         let (embeddings, encoder) = match (
-            RobertaEmbeddings::load(vb.pp("embeddings"), config),
-            RobertaEncoder::load(vb.pp("encoder"), config),
+            XLMRobertaEmbeddings::load(vb.pp("embeddings"), config),
+            XLMRobertaEncoder::load(vb.pp("encoder"), config),
         ) {
             (Ok(embeddings), Ok(encoder)) => (embeddings, encoder),
             (Err(err), _) | (_, Err(err)) => {
-                if let Some(model_type) = &config.model_type {
+                if let Some(_model_type) = &config.model_type {
                     if let (Ok(embeddings), Ok(encoder)) = (
-                        RobertaEmbeddings::load(vb.pp(&format!("{model_type}.embeddings")), config),
-                        RobertaEncoder::load(vb.pp(&format!("{model_type}.encoder")), config),
+                        XLMRobertaEmbeddings::load(vb.pp(&format!("roberta.embeddings")), config),
+                        XLMRobertaEncoder::load(vb.pp(&format!("roberta.encoder")), config),
                     ) {
                         (embeddings, encoder)
                     } else {
@@ -527,27 +528,27 @@ impl RobertaModel {
     }
 }
 
-pub struct RobertaModelWithPooler {
-    embeddings: RobertaEmbeddings,
-    encoder: RobertaEncoder,
-    pooler: RobertaPooler, 
+pub struct XLMRobertaModelWithPooler {
+    embeddings: XLMRobertaEmbeddings,
+    encoder: XLMRobertaEncoder,
+    pooler: XLMRobertaPooler, 
     pub device: Device,
 }
 
-impl RobertaModelWithPooler {
-    pub fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+impl XLMRobertaModelWithPooler {
+    pub fn load(vb: VarBuilder, config: &XLMRobertaConfig) -> Result<Self> {
         let (embeddings, encoder, pooler) = match (
-            RobertaEmbeddings::load(vb.pp("embeddings"), config),
-            RobertaEncoder::load(vb.pp("encoder"), config),
-            RobertaPooler::load(vb.pp("pooler"), config)
+            XLMRobertaEmbeddings::load(vb.pp("embeddings"), config),
+            XLMRobertaEncoder::load(vb.pp("encoder"), config),
+            XLMRobertaPooler::load(vb.pp("pooler"), config)
         ) {
             (Ok(embeddings), Ok(encoder), Ok(pooler)) => (embeddings, encoder, pooler),
             (Err(err), _, _) | (_, Err(err), _) | (_, _, Err(err)) => {
                 if let Some(model_type) = &config.model_type {
                     if let (Ok(embeddings), Ok(encoder), Ok(pooler)) = (
-                        RobertaEmbeddings::load(vb.pp(&format!("{model_type}.embeddings")), config),
-                        RobertaEncoder::load(vb.pp(&format!("{model_type}.encoder")), config),
-                        RobertaPooler::load(vb.pp(&format!("{model_type}.pooler")), config),
+                        XLMRobertaEmbeddings::load(vb.pp(&format!("{model_type}.embeddings")), config),
+                        XLMRobertaEncoder::load(vb.pp(&format!("{model_type}.encoder")), config),
+                        XLMRobertaPooler::load(vb.pp(&format!("{model_type}.pooler")), config),
                     ) {
                         (embeddings, encoder, pooler)
                     } else {
@@ -576,15 +577,15 @@ impl RobertaModelWithPooler {
     }
 }
 
-struct RobertaClassificationHead{
+struct XLMRobertaClassificationHead{
     dense: Linear,
     dropout: Dropout,
     out_proj: Linear
 }
 
-impl RobertaClassificationHead {
+impl XLMRobertaClassificationHead {
 
-    fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+    fn load(vb: VarBuilder, config: &XLMRobertaConfig) -> Result<Self> {
         let dense = linear(config.hidden_size, config.hidden_size, vb.pp("dense"))?;
         let classifier_dropout = config.classifier_dropout;
 
@@ -615,26 +616,26 @@ impl RobertaClassificationHead {
     }
 }
 
-pub struct RobertaForSequenceClassification {
-    roberta: RobertaModel,
-    classifier: RobertaClassificationHead,
+pub struct XLMRobertaForSequenceClassification {
+    xlmroberta: XLMRobertaModel,
+    classifier: XLMRobertaClassificationHead,
     pub device: Device,
-    config: RobertaConfig
+    config: XLMRobertaConfig
 }
 
-impl  RobertaForSequenceClassification {
-    pub fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
-        let (roberta, classifier) = match (
-            RobertaModel::load(vb.pp("roberta"), config),
-            RobertaClassificationHead::load(vb.pp("classifier"), config),
+impl  XLMRobertaForSequenceClassification {
+    pub fn load(vb: VarBuilder, config: &XLMRobertaConfig) -> Result<Self> {
+        let (xlmroberta, classifier) = match (
+            XLMRobertaModel::load(vb.pp("roberta"), config),
+            XLMRobertaClassificationHead::load(vb.pp("classifier"), config),
         ) {
-            (Ok(roberta), Ok(classifier)) => (roberta, classifier),
+            (Ok(xlmroberta), Ok(classifier)) => (xlmroberta, classifier),
             (Err(err), _) | (_, Err(err)) => {
                 return Err(err);
             }
         };
         Ok(Self {
-            roberta,
+            xlmroberta,
             classifier,
             device: vb.device().clone(),
             config: config.clone()
@@ -643,7 +644,7 @@ impl  RobertaForSequenceClassification {
 
     pub fn forward(&self, input_ids: &Tensor, token_type_ids: &Tensor, labels: Option<&Tensor>) -> Result<SequenceClassifierOutput> {
         let outputs = self
-            .roberta
+            .xlmroberta
             .forward(input_ids, token_type_ids)?;
         let mut problem_type: String = String::from("");
 
@@ -698,21 +699,21 @@ impl  RobertaForSequenceClassification {
 
 }
 
-pub struct RobertaForTokenClassification {
-    roberta: RobertaModel,
+pub struct XLMRobertaForTokenClassification {
+    xlmroberta: XLMRobertaModel,
     dropout: Dropout,
     classifier: Linear,
     pub device: Device,
 }
 
-impl RobertaForTokenClassification {
-    pub fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+impl XLMRobertaForTokenClassification {
+    pub fn load(vb: VarBuilder, config: &XLMRobertaConfig) -> Result<Self> {
         let classifier_dropout = config.classifier_dropout;
 
         println!("{:?}", config);
 
-        let (roberta, classifier) = match (
-            RobertaModel::load(vb.pp("roberta"), config),
+        let (xlmroberta, classifier) = match (
+            XLMRobertaModel::load(vb.pp("roberta"), config),
 
             if Option::is_some(&config._num_labels) {
                 linear(config.hidden_size, config._num_labels.unwrap(), vb.pp("classifier"))
@@ -724,13 +725,13 @@ impl RobertaForTokenClassification {
             }
             
         ) {
-            (Ok(roberta), Ok(classifier)) => (roberta, classifier),
+            (Ok(xlmroberta), Ok(classifier)) => (xlmroberta, classifier),
             (Err(err), _) | (_, Err(err)) => {
                 return Err(err);
             }
         };
         Ok(Self {
-            roberta,
+            xlmroberta,
             dropout: Dropout::new(classifier_dropout.unwrap_or_else(|| 0.2)),
             classifier,
             device: vb.device().clone(),
@@ -739,7 +740,7 @@ impl RobertaForTokenClassification {
 
     pub fn forward(&self, input_ids: &Tensor, token_type_ids: &Tensor, labels: Option<&Tensor>) -> Result<TokenClassifierOutput> {
         let outputs = self
-            .roberta
+            .xlmroberta
             .forward(input_ids, token_type_ids)?;
         let outputs = self.dropout.forward(&outputs)?;
 
@@ -767,32 +768,33 @@ impl RobertaForTokenClassification {
 
 }
 
-pub struct RobertaForQuestionAnswering {
-    roberta: RobertaModel,
+
+pub struct XLMRobertaForQuestionAnswering {
+    xlmroberta: XLMRobertaModel,
     dropout: Dropout,
     qa_outputs: Linear,
     pub device: Device,
 }
 
 
-impl RobertaForQuestionAnswering {
-    pub fn load(vb: VarBuilder, config: &RobertaConfig) -> Result<Self> {
+impl XLMRobertaForQuestionAnswering {
+    pub fn load(vb: VarBuilder, config: &XLMRobertaConfig) -> Result<Self> {
         let classifier_dropout = config.classifier_dropout;
 
         println!("{:?}", config);
 
-        let (roberta, qa_outputs) = match (
-            RobertaModel::load(vb.pp("roberta"), config),
+        let (xlmroberta, qa_outputs) = match (
+            XLMRobertaModel::load(vb.pp("roberta"), config),
             linear(config.hidden_size, 2, vb.pp("classifier"))
             
         ) {
-            (Ok(roberta), Ok(qa_outputs)) => (roberta, qa_outputs),
+            (Ok(xlmroberta), Ok(qa_outputs)) => (xlmroberta, qa_outputs),
             (Err(err), _) | (_, Err(err)) => {
                 return Err(err);
             }
         };
         Ok(Self {
-            roberta,
+            xlmroberta,
             dropout: Dropout::new(classifier_dropout.unwrap_or_else(|| 0.2)),
             qa_outputs,
             device: vb.device().clone(),
@@ -801,7 +803,7 @@ impl RobertaForQuestionAnswering {
 
     pub fn forward(&self, input_ids: &Tensor, token_type_ids: &Tensor, start_positions: Option<&Tensor>, end_positions:  Option<&Tensor>) -> Result<QuestionAnsweringModelOutput> {
         let outputs = self
-            .roberta
+            .xlmroberta
             .forward(input_ids, token_type_ids)?;
         let outputs = self.dropout.forward(&outputs)?;
 

@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers.models.roberta.modeling_roberta import RobertaModel, RobertaEmbeddings, RobertaConfig
-from transformers import RobertaForSequenceClassification
+from transformers import RobertaForSequenceClassification, RobertaForTokenClassification
 
-model = RobertaForSequenceClassification.from_pretrained('roberta-large-mnli')
+model = RobertaModel.from_pretrained('Davlan/xlm-roberta-base-wikiann-ner')
 
 # input_ids = torch.tensor([[0, 31414, 232, 328, 740, 1140, 12695, 69, 46078, 1588, 2], [0, 31414, 232, 328, 740, 1140, 12695, 69, 46078, 1588, 2]])
 # with torch.no_grad():
