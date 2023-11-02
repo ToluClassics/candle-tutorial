@@ -1,5 +1,5 @@
 // use anyhow::Result;
-use candle_core::{DType, Device, Tensor, Result};
+use candle_core::{Device, Tensor, Result};
 
 fn tensor_from_data() -> Result<()> {
     let data: [u32; 3] = [1u32, 2, 3];

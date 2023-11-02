@@ -70,6 +70,13 @@ fn main() -> Result<()> {
 
     println!("output: {:?}", output.i((.., 0))?.dims2());
 
+    let logits = &[[0.1_f32, 0.2], [0.5, 0.6]];
+    let logits = Tensor::new(logits, &device)?;
+
+    println!("logits: {:?}", logits.i((.., 0))?.to_vec1::<f32>()?);
+    println!("logits: {:?}", logits.i((.., 1))?.to_vec1::<f32>()?);
+
+
 
     Ok(())
 }
