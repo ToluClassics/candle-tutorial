@@ -111,7 +111,8 @@ The examples shows below can be found [here]();
     - Pytorch: in pytorch, the data type is automatically inferred from the data;
 
         ```python
-        zero_tensor = torch.ones_like(tensor)
+        zero_tensor = torch.zeros_like(tensor)
+        ones_tensor = torch.ones_like(tensor)
         random_tensor = torch.rand_like(tensor)
         ```
 
