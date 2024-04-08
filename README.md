@@ -87,9 +87,11 @@ The examples shows below can be found [here]();
         
         data: List = [1, 2, 3]
         tensor = torch.tensor(data)
+        print(tensor)
 
         nested_data = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
         nested_tensor = torch.tensor(nested_data)
+        print(nested_tensor)
         ```
     - Candle: in candle, the data type needs to be explicitly specified;
 
